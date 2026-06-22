@@ -44,13 +44,15 @@ All security tooling (CVE lookups, static analysis, sandboxed file reads) is exp
 
 ## Status
 
-Day 1 — project scaffolding. See [docs/architecture.md](docs/architecture.md) for the build roadmap.
+See [docs/architecture.md](docs/architecture.md) for the build roadmap.
 
-- [x] Project structure, packaging, MCP server skeleton
+- [x] Project structure, packaging, MCP server
 - [x] OSV.dev dependency-scan tool (working)
-- [ ] Bandit static-analysis tool
-- [ ] ADK agents wired to the MCP server
-- [ ] Risk scoring + report generation
+- [x] Bandit static-analysis tool (working)
+- [x] ADK agents wired to the MCP server (least-privilege toolsets)
+- [x] Risk scoring + Markdown report generation
+- [x] `sgai scan` runs end-to-end (deterministic core, no API key required)
+- [ ] Agent-driven pipeline run (needs `GOOGLE_API_KEY`)
 - [ ] Optional: GitHub PR creation
 - [ ] Deployment (Cloud Run) + demo
 

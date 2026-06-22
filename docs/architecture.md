@@ -64,6 +64,7 @@ stage's output.
 - [x] **M2 — Risk + report:** deterministic normalization, de-duplication, risk
   ranking (`risk.py`) and Markdown report generation (`report.py`); see
   `examples/sample_report.md`.
-- [ ] **M3 — CLI end-to-end:** `sgai scan` runs the full pipeline.
+- [x] **M3 — CLI end-to-end:** `sgai scan <repo>` discovers manifests + source,
+  runs the tools, scores, and writes a Markdown report (`runner.py`, `cli.py`).
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
 - [ ] **M5 — Deploy + demo:** Cloud Run + the <5-minute demo video.
