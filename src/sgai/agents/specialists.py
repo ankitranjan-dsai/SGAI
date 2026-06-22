@@ -1,18 +1,22 @@
 """The six specialist agents that make up the SGAI audit pipeline.
 
-Each builder returns a configured ADK ``LlmAgent``. The security tools they call
-are served by the MCP server in ``sgai.mcp_server`` and attached via an
-``MCPToolset`` (wired in ``orchestrator.py``).
-
-NOTE (Day 1): instructions and roles are defined here. The MCP toolset binding
-and output schemas are filled in as the pipeline is built out — see
-docs/architecture.md for the roadmap.
+Each builder returns a configured ADK ``LlmAgent``. The scanner, dependency, and
+static-analysis agents are bound to the security MCP server via a *filtered*
+``MCPToolset`` so each sees only the tools it needs (least privilege). The risk,
+remediation, and report agents reason over the prior agents' output and need no
+tools of their own.
 """
 
 from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
+from sgai.agents.security_tools import (
+    DEPENDENCY_TOOLS,
+    SCANNER_TOOLS,
+    STATIC_ANALYSIS_TOOLS,
+    build_security_toolset,
+)
 from sgai.config import MODEL
 
 
@@ -28,6 +32,7 @@ def build_scanner_agent() -> LlmAgent:
             "(requirements.txt, pyproject.toml). Report a structured inventory: "
             "source files to analyze and manifests to audit. Do not analyze content."
         ),
+        tools=[build_security_toolset(SCANNER_TOOLS)],
     )
 
 
@@ -42,6 +47,7 @@ def build_dependency_audit_agent() -> LlmAgent:
             "the dependency-scan tools to check each pin against OSV.dev. Report every "
             "vulnerable package with its version and the matched vulnerability IDs."
         ),
+        tools=[build_security_toolset(DEPENDENCY_TOOLS)],
     )
 
 
@@ -56,6 +62,7 @@ def build_static_analysis_agent() -> LlmAgent:
             "run Bandit over the source files identified by the scanner. Report each "
             "finding with its severity, confidence, location, and a one-line explanation."
         ),
+        tools=[build_security_toolset(STATIC_ANALYSIS_TOOLS)],
     )
 
 

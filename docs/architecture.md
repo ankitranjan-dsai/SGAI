@@ -59,8 +59,8 @@ stage's output.
 
 - [x] **M0 — Foundation:** packaging, config, MCP server with working OSV.dev +
   Bandit + sandboxed file tools, example vulnerable app, sandbox unit test.
-- [ ] **M1 — Wire agents to MCP:** attach `MCPToolset` to the specialists so they
-  call the real tools; get scanner → deps/static producing structured findings.
+- [x] **M1 — Wire agents to MCP:** specialists bound to the security server via a
+  filtered `MCPToolset` (least-privilege tool access, verified over stdio).
 - [ ] **M2 — Risk + report:** scoring, de-duplication, Markdown report output.
 - [ ] **M3 — CLI end-to-end:** `sgai scan` runs the full pipeline.
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
