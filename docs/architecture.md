@@ -61,7 +61,9 @@ stage's output.
   Bandit + sandboxed file tools, example vulnerable app, sandbox unit test.
 - [x] **M1 — Wire agents to MCP:** specialists bound to the security server via a
   filtered `MCPToolset` (least-privilege tool access, verified over stdio).
-- [ ] **M2 — Risk + report:** scoring, de-duplication, Markdown report output.
+- [x] **M2 — Risk + report:** deterministic normalization, de-duplication, risk
+  ranking (`risk.py`) and Markdown report generation (`report.py`); see
+  `examples/sample_report.md`.
 - [ ] **M3 — CLI end-to-end:** `sgai scan` runs the full pipeline.
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
 - [ ] **M5 — Deploy + demo:** Cloud Run + the <5-minute demo video.

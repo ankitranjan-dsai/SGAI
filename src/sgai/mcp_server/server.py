@@ -147,13 +147,23 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"error": "bandit produced no parseable output", "stderr": proc.stderr}
 
+    root_resolved = Path(root).resolve()
+
+    def _relativize(filename: str | None) -> str:
+        if not filename:
+            return "?"
+        try:
+            return str(Path(filename).resolve().relative_to(root_resolved))
+        except ValueError:
+            return filename
+
     findings = [
         {
             "test_id": r.get("test_id"),
             "issue": r.get("issue_text"),
             "severity": r.get("issue_severity"),
             "confidence": r.get("issue_confidence"),
-            "file": r.get("filename"),
+            "file": _relativize(r.get("filename")),
             "line": r.get("line_number"),
         }
         for r in report.get("results", [])
