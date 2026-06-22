@@ -1,0 +1,5 @@
+# Intentionally vulnerable pins used to exercise the dependency auditor.
+# Do NOT use these versions in real software.
+jinja2==2.11.2
+PyYAML==5.3.1
+requests==2.19.1
