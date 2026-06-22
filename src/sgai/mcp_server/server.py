@@ -1,4 +1,4 @@
-"""The SecureGuard AI security MCP server.
+"""The SGAI security MCP server.
 
 Exposes the security capabilities the agents rely on as MCP tools:
 
@@ -10,7 +10,7 @@ Exposes the security capabilities the agents rely on as MCP tools:
 
 Run standalone with::
 
-    uv run python -m secureguard.mcp_server.server
+    uv run python -m sgai.mcp_server.server
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from secureguard.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL
-from secureguard.mcp_server.sandbox import SandboxError, safe_resolve
+from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL
+from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
-mcp = FastMCP("secureguard-security-tools")
+mcp = FastMCP("sgai-security-tools")
 
 # File extensions we consider "source" worth scanning.
 SOURCE_EXTENSIONS = {".py"}

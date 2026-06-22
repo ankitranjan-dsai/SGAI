@@ -1,16 +1,16 @@
-# SecureGuard AI
+# SGAI — SecureGuardAI
 
 > A multi-agent security review system that audits a codebase for vulnerabilities, maps findings to known CVEs, scores them by risk, and proposes remediation — autonomously.
 
 **Kaggle AI Agents Capstone — Track: Freestyle**
 
-SecureGuard AI points a team of specialist agents at any Python repository. They scan the source, audit dependencies against the live [OSV.dev](https://osv.dev) vulnerability database, run static analysis, score and de-duplicate the findings by severity, and generate a prioritized, remediation-ready security report — in minutes instead of weeks.
+SGAI points a team of specialist agents at any Python repository. They scan the source, audit dependencies against the live [OSV.dev](https://osv.dev) vulnerability database, run static analysis, score and de-duplicate the findings by severity, and generate a prioritized, remediation-ready security report — in minutes instead of weeks.
 
 ---
 
 ## Why agents?
 
-A security audit is naturally parallel and specialized. No single prompt can simultaneously enumerate source files, query a CVE database, run a static analyzer, reason about exploitability, and write patches. SecureGuard AI gives each of those jobs to a dedicated agent and coordinates them with an orchestrator — which is exactly what makes the multi-agent architecture *necessary* rather than decorative.
+A security audit is naturally parallel and specialized. No single prompt can simultaneously enumerate source files, query a CVE database, run a static analyzer, reason about exploitability, and write patches. SGAI gives each of those jobs to a dedicated agent and coordinates them with an orchestrator — which is exactly what makes the multi-agent architecture *necessary* rather than decorative.
 
 ## Architecture
 
@@ -36,10 +36,10 @@ All security tooling (CVE lookups, static analysis, sandboxed file reads) is exp
 
 ## Required course concepts demonstrated
 
-| Concept | How SecureGuard AI demonstrates it |
+| Concept | How SGAI demonstrates it |
 |---|---|
 | **Multi-agent system (ADK)** | Orchestrator + 6 specialist agents built on Google's Agent Development Kit |
-| **MCP Server** | Custom server (`src/secureguard/mcp_server`) exposing OSV.dev CVE lookup, Bandit static analysis, and sandboxed file tools |
+| **MCP Server** | Custom server (`src/sgai/mcp_server`) exposing OSV.dev CVE lookup, Bandit static analysis, and sandboxed file tools |
 | **Security features** | Sandboxed file access scoped to the target repo, least-privilege GitHub token, auditable/traceable findings, input validation |
 
 ## Status
@@ -64,10 +64,10 @@ uv sync                      # create venv + install dependencies
 cp .env.example .env         # add your GOOGLE_API_KEY
 
 # run the security MCP server standalone
-uv run python -m secureguard.mcp_server.server
+uv run python -m sgai.mcp_server.server
 
 # run a scan (CLI — coming soon)
-uv run secureguard scan ./examples/vulnerable_app
+uv run sgai scan ./examples/vulnerable_app
 ```
 
 ## License

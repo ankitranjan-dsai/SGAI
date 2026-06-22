@@ -1,8 +1,8 @@
-"""Tests for the filesystem sandbox — SecureGuard AI's core security boundary."""
+"""Tests for the filesystem sandbox — SGAI's core security boundary."""
 
 import pytest
 
-from secureguard.mcp_server.sandbox import SandboxError, safe_resolve
+from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
 
 def test_allows_path_inside_root(tmp_path):

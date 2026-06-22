@@ -1,4 +1,4 @@
-"""The root orchestrator that drives the SecureGuard AI audit pipeline.
+"""The root orchestrator that drives the SGAI audit pipeline.
 
 The audit is a pipeline: scan → (dependency audit ∥ static analysis) → risk
 scoring → remediation → report. The dependency audit and static analysis are
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
 
-from secureguard.agents.specialists import (
+from sgai.agents.specialists import (
     build_dependency_audit_agent,
     build_remediation_agent,
     build_report_agent,
@@ -38,7 +38,7 @@ def build_pipeline() -> SequentialAgent:
     report = build_report_agent()
 
     return SequentialAgent(
-        name="secureguard_pipeline",
+        name="sgai_pipeline",
         sub_agents=[scanner, analysis, risk, remediation, report],
     )
 
@@ -50,11 +50,11 @@ def build_root_agent() -> LlmAgent:
     pipeline. For now this returns the orchestrator shell.
     """
     return LlmAgent(
-        name="secureguard_orchestrator",
+        name="sgai_orchestrator",
         model="gemini-2.0-flash",
         description="Coordinates a multi-agent security audit of a target repository.",
         instruction=(
-            "You are SecureGuard AI. Given a target repository, run the security "
+            "You are SGAI. Given a target repository, run the security "
             "audit pipeline and return the final report. Keep the user informed of "
             "which stage is running."
         ),

@@ -1,7 +1,7 @@
-"""The six specialist agents that make up the SecureGuard AI audit pipeline.
+"""The six specialist agents that make up the SGAI audit pipeline.
 
 Each builder returns a configured ADK ``LlmAgent``. The security tools they call
-are served by the MCP server in ``secureguard.mcp_server`` and attached via an
+are served by the MCP server in ``sgai.mcp_server`` and attached via an
 ``MCPToolset`` (wired in ``orchestrator.py``).
 
 NOTE (Day 1): instructions and roles are defined here. The MCP toolset binding
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
-from secureguard.config import MODEL
+from sgai.config import MODEL
 
 
 def build_scanner_agent() -> LlmAgent:

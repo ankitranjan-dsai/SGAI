@@ -3,7 +3,7 @@
 A security tool that reads arbitrary files is itself a security risk. Every file
 path coming from an agent is resolved and verified to live inside an allow-listed
 root before the server will touch it. This blocks path-traversal (``../../etc``)
-and symlink escapes, and is the core of SecureGuard AI's "Security features"
+and symlink escapes, and is the core of SGAI's "Security features"
 guarantee.
 """
 

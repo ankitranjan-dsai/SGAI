@@ -1,8 +1,8 @@
-"""Command-line interface for SecureGuard AI.
+"""Command-line interface for SGAI.
 
 Usage::
 
-    secureguard scan <path-to-repo>
+    sgai scan <path-to-repo>
 
 Day 1: the CLI parses arguments and prints the planned pipeline. Wiring it to the
 orchestrator agent is the next milestone (see docs/architecture.md).
@@ -25,14 +25,14 @@ def _scan(path: str) -> int:
         console.print(f"[red]error:[/red] {path!r} is not a directory")
         return 1
 
-    console.print(f"[bold]SecureGuard AI[/bold] — target: [cyan]{target}[/cyan]")
+    console.print(f"[bold]SGAI[/bold] — target: [cyan]{target}[/cyan]")
     console.print("Pipeline: scan → (deps ∥ static) → risk → remediation → report")
     console.print("[yellow]Agent pipeline not yet wired — coming in the next milestone.[/yellow]")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="secureguard", description="Multi-agent security review.")
+    parser = argparse.ArgumentParser(prog="sgai", description="Multi-agent security review.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Audit a repository for vulnerabilities.")

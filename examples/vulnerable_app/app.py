@@ -1,6 +1,6 @@
 """An intentionally insecure sample app.
 
-This file exists only as a target for SecureGuard AI's static-analysis agent.
+This file exists only as a target for SGAI's static-analysis agent.
 Each function below contains a well-known unsafe pattern that Bandit flags.
 Do NOT copy any of this into real software.
 """

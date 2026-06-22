@@ -1,15 +1,15 @@
-# SecureGuard AI — Architecture
+# SGAI — Architecture
 
 ## Overview
 
-SecureGuard AI audits a Python repository for security vulnerabilities using a
+SGAI audits a Python repository for security vulnerabilities using a
 team of specialist agents coordinated by an orchestrator. The agents reach the
 outside world only through a custom MCP server, which mediates and sandboxes
 every CVE lookup, static-analysis run, and file read.
 
 ## Components
 
-### 1. Security MCP server (`src/secureguard/mcp_server`)
+### 1. Security MCP server (`src/sgai/mcp_server`)
 
 A standalone MCP server exposing the security toolbox:
 
@@ -25,11 +25,11 @@ A standalone MCP server exposing the security toolbox:
 which fully resolves the path (defeating `..` and symlinks) and rejects anything
 outside the allow-listed scan root.
 
-### 2. Agent team (`src/secureguard/agents`)
+### 2. Agent team (`src/sgai/agents`)
 
 ```
 OrchestratorAgent
-└── SequentialAgent: secureguard_pipeline
+└── SequentialAgent: sgai_pipeline
     ├── scanner_agent
     ├── ParallelAgent: analysis_stage
     │   ├── dependency_audit_agent   (OSV.dev)
@@ -43,9 +43,9 @@ The dependency audit and static analysis are independent, so they fan out in
 parallel; the remaining stages are sequential because each consumes the previous
 stage's output.
 
-### 3. CLI (`src/secureguard/cli.py`)
+### 3. CLI (`src/sgai/cli.py`)
 
-`secureguard scan <repo>` is the entry point that kicks off the orchestrator.
+`sgai scan <repo>` is the entry point that kicks off the orchestrator.
 
 ## Required course concepts
 
@@ -62,6 +62,6 @@ stage's output.
 - [ ] **M1 — Wire agents to MCP:** attach `MCPToolset` to the specialists so they
   call the real tools; get scanner → deps/static producing structured findings.
 - [ ] **M2 — Risk + report:** scoring, de-duplication, Markdown report output.
-- [ ] **M3 — CLI end-to-end:** `secureguard scan` runs the full pipeline.
+- [ ] **M3 — CLI end-to-end:** `sgai scan` runs the full pipeline.
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
 - [ ] **M5 — Deploy + demo:** Cloud Run + the <5-minute demo video.
