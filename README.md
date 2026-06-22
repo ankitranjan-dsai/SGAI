@@ -40,7 +40,8 @@ All security tooling (CVE lookups, static analysis, sandboxed file reads) is exp
 |---|---|
 | **Multi-agent system (ADK)** | Orchestrator + 6 specialist agents built on Google's Agent Development Kit |
 | **MCP Server** | Custom server (`src/sgai/mcp_server`) exposing OSV.dev CVE lookup, Bandit static analysis, and sandboxed file tools |
-| **Security features** | Sandboxed file access scoped to the target repo, least-privilege GitHub token, auditable/traceable findings, input validation |
+| **Security features** | Sandboxed file access (path-traversal + symlink safe), least-privilege per-agent toolsets, stateless request handling, input validation |
+| **Deployability** *(bonus)* | Stateless FastAPI service (`src/sgai/api.py`) + Dockerfile, Cloud Run ready — see [docs/deploy.md](docs/deploy.md) |
 
 ## Status
 

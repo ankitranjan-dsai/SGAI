@@ -67,4 +67,5 @@ stage's output.
 - [x] **M3 — CLI end-to-end:** `sgai scan <repo>` discovers manifests + source,
   runs the tools, scores, and writes a Markdown report (`runner.py`, `cli.py`).
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
-- [ ] **M5 — Deploy + demo:** Cloud Run + the <5-minute demo video.
+- [~] **M5 — Deploy + demo:** stateless FastAPI service (`api.py`) + Dockerfile +
+  Cloud Run docs (`docs/deploy.md`) done; live agent run and demo video remain.
