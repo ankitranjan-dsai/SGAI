@@ -27,10 +27,10 @@ def build_scanner_agent() -> LlmAgent:
         model=MODEL,
         description="Enumerates source files and dependency manifests in the target repo.",
         instruction=(
-            "You map the attack surface of a codebase. Use the source-listing tools "
-            "to enumerate Python files and locate dependency manifests "
-            "(requirements.txt, pyproject.toml). Report a structured inventory: "
-            "source files to analyze and manifests to audit. Do not analyze content."
+            "You map the attack surface of a codebase. The repository's absolute root "
+            "path is stated in the conversation. Call `list_source_files` with `root` "
+            "set to that exact absolute path. Then report the Python source files found "
+            "and whether a requirements.txt is present. Use ONLY the tools provided to you."
         ),
         tools=[build_security_toolset(SCANNER_TOOLS)],
     )
@@ -43,9 +43,12 @@ def build_dependency_audit_agent() -> LlmAgent:
         model=MODEL,
         description="Audits dependencies against OSV.dev and reports known CVEs.",
         instruction=(
-            "You audit third-party dependencies. Given a requirements manifest, use "
-            "the dependency-scan tools to check each pin against OSV.dev. Report every "
-            "vulnerable package with its version and the matched vulnerability IDs."
+            "You audit third-party dependencies. The repository's absolute root path is "
+            "stated in the conversation. Call `scan_requirements_file` with "
+            "path='requirements.txt' and `root` set to that exact absolute path. If that "
+            "returns an error, call `list_source_files` with the root to locate the "
+            "manifest, then retry. Report every vulnerable package with its version and "
+            "the matched vulnerability IDs. Use ONLY the tools provided to you."
         ),
         tools=[build_security_toolset(DEPENDENCY_TOOLS)],
     )
@@ -58,9 +61,11 @@ def build_static_analysis_agent() -> LlmAgent:
         model=MODEL,
         description="Runs Bandit static analysis and collects code-level findings.",
         instruction=(
-            "You find vulnerabilities in source code. Use the static-analysis tool to "
-            "run Bandit over the source files identified by the scanner. Report each "
-            "finding with its severity, confidence, location, and a one-line explanation."
+            "You find vulnerabilities in source code. The repository's absolute root "
+            "path is stated in the conversation. Call `run_static_analysis` with "
+            "path='.' and `root` set to that exact absolute path. Report each finding "
+            "with its severity, confidence, location, and a one-line explanation. "
+            "Use ONLY the tools provided to you."
         ),
         tools=[build_security_toolset(STATIC_ANALYSIS_TOOLS)],
     )

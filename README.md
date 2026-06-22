@@ -53,7 +53,7 @@ See [docs/architecture.md](docs/architecture.md) for the build roadmap.
 - [x] ADK agents wired to the MCP server (least-privilege toolsets)
 - [x] Risk scoring + Markdown report generation
 - [x] `sgai scan` runs end-to-end (deterministic core, no API key required)
-- [ ] Agent-driven pipeline run (needs `GOOGLE_API_KEY`)
+- [x] Agent-driven report via `sgai scan --explain` (triage → report agents, Gemini)
 - [ ] Optional: GitHub PR creation
 - [ ] Deployment (Cloud Run) + demo
 
@@ -64,14 +64,20 @@ Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/).
 ```bash
 # clone, then from the repo root:
 uv sync                      # create venv + install dependencies
-cp .env.example .env         # add your GOOGLE_API_KEY
 
-# run the security MCP server standalone
-uv run python -m sgai.mcp_server.server
-
-# run a scan (CLI — coming soon)
+# run a scan — deterministic core, NO API key required:
 uv run sgai scan ./examples/vulnerable_app
+
+# add a Gemini key for the multi-agent narrated report:
+cp .env.example .env         # then put your GOOGLE_API_KEY in .env
+uv run sgai scan ./examples/vulnerable_app --explain
+
+# or run the security MCP server standalone:
+uv run python -m sgai.mcp_server.server
 ```
+
+Get a free Gemini key at https://aistudio.google.com/apikey. The free tier allows
+5 requests/minute, which the lean two-agent narration layer stays within.
 
 ## License
 

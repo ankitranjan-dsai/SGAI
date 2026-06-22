@@ -41,11 +41,20 @@ OrchestratorAgent
 
 The dependency audit and static analysis are independent, so they fan out in
 parallel; the remaining stages are sequential because each consumes the previous
-stage's output.
+stage's output. This is the **fully autonomous** pipeline (`agent_runner.run_agent_scan`)
+where agents drive every tool call; it needs a higher Gemini rate limit.
+
+**Default narration layer (`agents/narrator.py`).** Because the free Gemini tier
+allows only 5 requests/minute, the default agent path is leaner: the deterministic
+core gathers every finding via the MCP tools with **zero LLM calls**, then a
+two-agent `SequentialAgent` (triage → report writer) reasons over the findings to
+produce the narrated report. Same multi-agent ADK system, reliably within free-tier
+limits. Run it with `sgai scan <repo> --explain`.
 
 ### 3. CLI (`src/sgai/cli.py`)
 
-`sgai scan <repo>` is the entry point that kicks off the orchestrator.
+`sgai scan <repo>` runs the deterministic audit; add `--explain` to write the
+report with the multi-agent narration layer.
 
 ## Required course concepts
 
@@ -67,5 +76,7 @@ stage's output.
 - [x] **M3 — CLI end-to-end:** `sgai scan <repo>` discovers manifests + source,
   runs the tools, scores, and writes a Markdown report (`runner.py`, `cli.py`).
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
+- [x] **M4.5 — Live agent run:** multi-agent narration (`agents/narrator.py`,
+  `agent_runner.py`) writes the report via Gemini; `sgai scan --explain`.
 - [~] **M5 — Deploy + demo:** stateless FastAPI service (`api.py`) + Dockerfile +
-  Cloud Run docs (`docs/deploy.md`) done; live agent run and demo video remain.
+  Cloud Run docs (`docs/deploy.md`) done; demo video remains.

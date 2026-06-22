@@ -21,6 +21,7 @@ from sgai.agents.specialists import (
     build_scanner_agent,
     build_static_analysis_agent,
 )
+from sgai.config import MODEL
 
 
 def build_pipeline() -> SequentialAgent:
@@ -51,7 +52,7 @@ def build_root_agent() -> LlmAgent:
     """
     return LlmAgent(
         name="sgai_orchestrator",
-        model="gemini-2.0-flash",
+        model=MODEL,
         description="Coordinates a multi-agent security audit of a target repository.",
         instruction=(
             "You are SGAI. Given a target repository, run the security "

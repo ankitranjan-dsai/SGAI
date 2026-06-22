@@ -33,14 +33,21 @@ _SEVERITY_STYLE = {
 }
 
 
-def _scan(path: str, output: str) -> int:
+def _scan(path: str, output: str, explain: bool) -> int:
     target = Path(path).resolve()
     if not target.is_dir():
         console.print(f"[red]error:[/red] {path!r} is not a directory")
         return 1
 
     console.print(f"[bold]SGAI[/bold] auditing [cyan]{target}[/cyan] …")
-    findings, report = asyncio.run(run_scan(path))
+    if explain:
+        # Deterministic scan, then the multi-agent narration layer writes the report.
+        from sgai.agent_runner import run_agent_report
+
+        console.print("[dim]Running multi-agent narration (triage → report) …[/dim]")
+        findings, report = asyncio.run(run_agent_report(str(target)))
+    else:
+        findings, report = asyncio.run(run_scan(path))
 
     if not findings:
         console.print("[green]✓ No vulnerabilities found.[/green]")
@@ -67,10 +74,15 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument(
         "-o", "--output", default="sgai_report.md", help="Where to write the Markdown report."
     )
+    scan.add_argument(
+        "--explain",
+        action="store_true",
+        help="Use the multi-agent narration layer (Gemini) to write the report.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "scan":
-        return _scan(args.path, args.output)
+        return _scan(args.path, args.output, args.explain)
     parser.print_help()
     return 1
 

@@ -19,8 +19,8 @@ from mcp import StdioServerParameters
 # Tool names exposed by sgai.mcp_server.server, grouped by the agent that needs
 # them. Used as MCPToolset filters to enforce least-privilege tool access.
 SCANNER_TOOLS = ["list_source_files", "read_source_file"]
-DEPENDENCY_TOOLS = ["scan_dependency", "scan_requirements_file"]
-STATIC_ANALYSIS_TOOLS = ["run_static_analysis", "list_source_files"]
+DEPENDENCY_TOOLS = ["list_source_files", "scan_requirements_file"]
+STATIC_ANALYSIS_TOOLS = ["list_source_files", "run_static_analysis"]
 
 
 def build_security_toolset(tool_filter: list[str] | None = None) -> MCPToolset:

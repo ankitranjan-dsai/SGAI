@@ -14,7 +14,7 @@ load_dotenv()
 
 # Model the ADK agents run on. Gemini Flash is fast and cheap, which suits the
 # fan-out pattern where several agents run in parallel.
-MODEL: str = os.getenv("SGAI_MODEL", "gemini-2.0-flash")
+MODEL: str = os.getenv("SGAI_MODEL", "gemini-2.5-flash")
 
 # Least-privilege GitHub token. Only used if PR creation is enabled; scope it to
 # a single repo with pull-request write access and nothing else.
