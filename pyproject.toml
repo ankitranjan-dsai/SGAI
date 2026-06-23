@@ -34,6 +34,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sgai"]
+# Ship the web UI as package data so the deployed service can serve it.
+artifacts = ["src/sgai/web/*.html"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/sgai/web/index.html" = "sgai/web/index.html"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

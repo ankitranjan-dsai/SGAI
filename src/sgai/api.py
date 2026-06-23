@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from sgai.mcp_server import server
@@ -28,10 +29,13 @@ from sgai.risk import assess
 
 app = FastAPI(title="SGAI", description="Multi-agent security review service.", version="0.1.0")
 
+_INDEX_HTML = (Path(__file__).parent / "web" / "index.html").read_text()
+
 
 class ScanRequest(BaseModel):
     requirements: str = ""  # contents of a requirements.txt
     code: str = ""  # a Python source file to statically analyze
+    explain: bool = False  # narrate the findings with the multi-agent layer
 
 
 class FindingOut(BaseModel):
@@ -47,6 +51,12 @@ class ScanResponse(BaseModel):
     finding_count: int
     findings: list[FindingOut]
     report_markdown: str
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """Serve the mobile-friendly web UI."""
+    return _INDEX_HTML
 
 
 @app.get("/health")
@@ -76,6 +86,17 @@ async def scan(req: ScanRequest) -> ScanResponse:
 
         findings = assess(dep_result, static_result)
         report = build_markdown_report("submitted code", findings)
+
+    # Optionally let the multi-agent layer narrate the report. If no key is
+    # configured or the model errors (e.g. rate limit), fall back to the
+    # deterministic report so the endpoint always succeeds.
+    if req.explain and findings:
+        try:
+            from sgai.agent_runner import narrate_findings
+
+            report = await narrate_findings(findings, "submitted code")
+        except Exception:  # noqa: BLE001 — never fail the scan over narration
+            report += "\n\n_(AI narration unavailable — showing the deterministic report.)_"
 
     return ScanResponse(
         finding_count=len(findings),

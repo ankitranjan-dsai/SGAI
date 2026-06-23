@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f172a" />
+<title>SGAI — SecureGuardAI</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #273449; --text: #e2e8f0;
+    --muted: #94a3b8; --accent: #38bdf8; --border: #334155;
+    --high: #f97316; --crit: #ef4444; --med: #eab308; --low: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; padding-bottom: 64px; }
+  header { padding: 12px 0 8px; }
+  h1 { font-size: 22px; margin: 0; }
+  h1 .sub { color: var(--accent); }
+  p.lead { color: var(--muted); margin: 4px 0 16px; }
+  label { display: block; font-weight: 600; margin: 14px 0 6px; font-size: 14px; }
+  textarea {
+    width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    resize: vertical; min-height: 96px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  button {
+    background: var(--accent); color: #052235; border: 0; border-radius: 10px;
+    padding: 14px 20px; font-size: 16px; font-weight: 700; cursor: pointer; width: 100%;
+  }
+  button:disabled { opacity: .6; cursor: progress; }
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 8px; }
+  .chip { padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; color: #0b1220; }
+  .chip.High { background: var(--high); } .chip.Critical { background: var(--crit); color: #fff; }
+  .chip.Medium { background: var(--med); } .chip.Low { background: var(--low); }
+  .chip.Unknown { background: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
+    border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+  .card.High { border-left-color: var(--high); } .card.Critical { border-left-color: var(--crit); }
+  .card.Medium { border-left-color: var(--med); } .card.Low { border-left-color: var(--low); }
+  .card .meta { color: var(--muted); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .card .title { font-weight: 600; margin: 4px 0; }
+  .card .fix { font-size: 13px; color: var(--muted); }
+  .card code { background: var(--panel2); padding: 1px 6px; border-radius: 6px; }
+  details { margin-top: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+  summary { cursor: pointer; font-weight: 600; }
+  pre { white-space: pre-wrap; word-wrap: break-word; font: 12px/1.5 ui-monospace, monospace; color: var(--muted); }
+  .err { color: var(--crit); margin-top: 12px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 24px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>SGAI <span class="sub">— SecureGuardAI</span></h1>
+    <p class="lead">Paste your dependencies and/or code. SGAI audits them for known CVEs and unsafe patterns.</p>
+  </header>
+
+  <label for="reqs">requirements.txt</label>
+  <textarea id="reqs" spellcheck="false">jinja2==2.11.2
+PyYAML==5.3.1
+requests==2.19.1</textarea>
+
+  <label for="code">Python code</label>
+  <textarea id="code" spellcheck="false">import subprocess, yaml
+API_PASSWORD = "supersecret123"
+subprocess.call(user_input, shell=True)
+eval(expr)
+yaml.load(raw)</textarea>
+
+  <div class="row">
+    <label class="check"><input type="checkbox" id="explain" /> AI-narrated report (needs Gemini key on server)</label>
+  </div>
+
+  <button id="scan">Scan for vulnerabilities</button>
+  <div id="status" class="note"></div>
+  <div id="results"></div>
+
+  <footer>Powered by OSV.dev &amp; Bandit · SGAI runs statelessly — nothing you submit is stored.</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const sevOrder = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
+
+$("scan").addEventListener("click", async () => {
+  const btn = $("scan");
+  const results = $("results");
+  const status = $("status");
+  results.innerHTML = "";
+  btn.disabled = true; btn.textContent = "Scanning…";
+  status.textContent = "Contacting SGAI…";
+  try {
+    const resp = await fetch("/scan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requirements: $("reqs").value,
+        code: $("code").value,
+        explain: $("explain").checked,
+      }),
+    });
+    if (!resp.ok) throw new Error("Server returned " + resp.status);
+    const data = await resp.json();
+    render(data);
+    status.textContent = "";
+  } catch (e) {
+    status.innerHTML = '<div class="err">Scan failed: ' + e.message + "</div>";
+  } finally {
+    btn.disabled = false; btn.textContent = "Scan for vulnerabilities";
+  }
+});
+
+function render(data) {
+  const results = $("results");
+  if (!data.finding_count) {
+    results.innerHTML = '<p style="color:#22c55e">✓ No vulnerabilities found.</p>';
+    return;
+  }
+  const counts = {};
+  data.findings.forEach((f) => (counts[f.severity] = (counts[f.severity] || 0) + 1));
+  const order = Object.keys(counts).sort((a, b) => sevOrder[b] - sevOrder[a]);
+
+  let html = '<div class="summary">';
+  html += order.map((s) => `<span class="chip ${s}">${s}: ${counts[s]}</span>`).join("");
+  html += "</div>";
+
+  data.findings
+    .sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity])
+    .forEach((f) => {
+      html += `<div class="card ${f.severity}">
+        <div class="meta"><span>${f.severity}</span><span>${f.source}</span><code>${esc(f.location)}</code><span>${esc(f.id)}</span></div>
+        <div class="title">${esc(f.title)}</div>
+        <div class="fix"><b>Fix:</b> ${esc(f.remediation)}</div>
+      </div>`;
+    });
+
+  if (data.report_markdown) {
+    html += `<details><summary>Full report (Markdown)</summary><pre>${esc(data.report_markdown)}</pre></details>`;
+  }
+  results.innerHTML = html;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+</script>
+</body>
+</html>

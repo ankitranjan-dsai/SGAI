@@ -50,6 +50,23 @@ async def run_agent_report(repo: str) -> tuple[list[Finding], str]:
         A tuple of (findings, agent-written Markdown report).
     """
     findings, _ = await run_scan(repo)
+    report = await narrate_findings(findings, repo)
+    return findings, report
+
+
+async def narrate_findings(findings: list[Finding], target: str) -> str:
+    """Run the two-agent narration pipeline over already-gathered findings.
+
+    Shared by the CLI (`sgai scan --explain`) and the web API, so any source of
+    findings can get an agent-written report without re-scanning.
+
+    Args:
+        findings: The findings to narrate.
+        target: Label for what was scanned (path, "submitted code", etc.).
+
+    Returns:
+        The agent-written Markdown report.
+    """
     payload = json.dumps([_finding_to_dict(f) for f in findings], indent=2)
 
     pipeline = build_narration_pipeline()
@@ -58,7 +75,7 @@ async def run_agent_report(repo: str) -> tuple[list[Finding], str]:
         app_name=_APP, user_id=_USER, session_id="report"
     )
 
-    prompt = f"Target: {repo}\nFindings (JSON):\n{payload}"
+    prompt = f"Target: {target}\nFindings (JSON):\n{payload}"
     message = types.Content(role="user", parts=[types.Part(text=prompt)])
 
     report = ""
@@ -67,7 +84,7 @@ async def run_agent_report(repo: str) -> tuple[list[Finding], str]:
     ):
         if event.is_final_response() and event.content and event.content.parts:
             report = event.content.parts[0].text or report
-    return findings, report
+    return report
 
 
 async def run_agent_scan(repo: str) -> str:

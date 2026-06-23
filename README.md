@@ -8,6 +8,33 @@ SGAI points a team of specialist agents at any Python repository. They scan the 
 
 ---
 
+## Quick start — one command
+
+**macOS / Linux**
+
+```bash
+./run.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+./run.ps1
+```
+
+That's it — the script installs everything it needs (via [`uv`](https://docs.astral.sh/uv/)), starts SGAI, and opens **http://localhost:8080** in your browser.
+
+### 📱 Use it from your phone
+
+SGAI's web app is mobile-first. Two ways to scan from a phone:
+
+1. **Same Wi-Fi:** after running the command above, open `http://<your-computer-ip>:8080` in your phone's browser.
+2. **Deployed:** host it on Cloud Run (see [docs/deploy.md](docs/deploy.md)) and open the public URL anywhere.
+
+Paste a `requirements.txt` and/or some code, tap **Scan**, and get a ranked report — no install on the phone.
+
+---
+
 ## Why agents?
 
 A security audit is naturally parallel and specialized. No single prompt can simultaneously enumerate source files, query a CVE database, run a static analyzer, reason about exploitability, and write patches. SGAI gives each of those jobs to a dedicated agent and coordinates them with an orchestrator — which is exactly what makes the multi-agent architecture *necessary* rather than decorative.
