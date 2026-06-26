@@ -1,0 +1,29 @@
+name: SGAI security audit
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # required to upload SARIF
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install SGAI
+        run: uv sync
+
+      - name: Run SGAI security audit
+        run: uv run sgai scan . --sarif sgai.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sgai.sarif

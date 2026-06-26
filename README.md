@@ -61,14 +61,16 @@ A security audit is naturally parallel and specialized. No single prompt can sim
 
 All security tooling (CVE lookups, static analysis, sandboxed file reads) is exposed through a **custom MCP server** that the agents call as tools. This keeps the security capabilities cleanly decoupled, independently testable, and reusable by any MCP-compatible client.
 
-## Required course concepts demonstrated
+## Required course concepts demonstrated — all 6
 
 | Concept | How SGAI demonstrates it |
 |---|---|
-| **Multi-agent system (ADK)** | Orchestrator + 6 specialist agents built on Google's Agent Development Kit |
-| **MCP Server** | Custom server (`src/sgai/mcp_server`) exposing OSV.dev CVE lookup, Bandit static analysis, and sandboxed file tools |
+| **Multi-agent system (ADK)** | Orchestrator + 6 specialist agents, plus a triage→report narration pipeline, built on Google's Agent Development Kit |
+| **MCP Server** | Custom server (`src/sgai/mcp_server`) exposing OSV.dev CVE lookup, Bandit + Semgrep static analysis, and sandboxed file tools |
 | **Security features** | Sandboxed file access (path-traversal + symlink safe), least-privilege per-agent toolsets, stateless request handling, input validation |
-| **Deployability** *(bonus)* | Stateless FastAPI service (`src/sgai/api.py`) + Dockerfile, Cloud Run ready — see [docs/deploy.md](docs/deploy.md) |
+| **Deployability** | Stateless FastAPI service (`src/sgai/api.py`) + Dockerfile, Cloud Run ready — see [docs/deploy.md](docs/deploy.md) |
+| **Agent skills / Agents CLI** | Packaged as the `sgai` CLI and a reusable skill ([SKILL.md](SKILL.md)); installable with `uv tool install` |
+| **Antigravity** | Security MCP server plugs into Antigravity (and any MCP agent) — see [docs/integrations.md](docs/integrations.md) |
 
 ## Status
 
