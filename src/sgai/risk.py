@@ -19,6 +19,9 @@ _BANDIT_SEVERITY = {
 # Confidence weights, used only to break ties between equal-severity findings.
 _CONFIDENCE_WEIGHT = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
+# Semgrep severities map onto our normalized scale.
+_SEMGREP_SEVERITY = {"ERROR": Severity.HIGH, "WARNING": Severity.MEDIUM, "INFO": Severity.LOW}
+
 # Concise remediation guidance for the Bandit tests our example surface triggers.
 # Extend as coverage grows; unmapped tests fall back to the issue text.
 _STATIC_REMEDIATION = {
@@ -53,6 +56,27 @@ def findings_from_static_analysis(result: dict) -> list[Finding]:
     return findings
 
 
+def findings_from_semgrep(result: dict) -> list[Finding]:
+    """Convert ``run_semgrep`` output into normalized findings (multi-language)."""
+    findings: list[Finding] = []
+    for r in result.get("findings", []):
+        check_id = r.get("check_id") or "semgrep"
+        severity = _SEMGREP_SEVERITY.get((r.get("severity") or "").upper(), Severity.LOW)
+        message = (r.get("message") or check_id).strip()
+        findings.append(
+            Finding(
+                id=check_id,
+                source="semgrep",
+                title=message[:140],
+                severity=severity,
+                location=f"{r.get('file', '?')}:{r.get('line', '?')}",
+                detail=message,
+                remediation="Review and fix the flagged pattern (see the Semgrep rule).",
+            )
+        )
+    return findings
+
+
 def findings_from_dependency_scan(result: dict) -> list[Finding]:
     """Convert ``scan_requirements_file`` output into normalized findings.
 
@@ -63,15 +87,16 @@ def findings_from_dependency_scan(result: dict) -> list[Finding]:
     findings: list[Finding] = []
     for v in result.get("vulnerable", []):
         package, version = v.get("package", "?"), v.get("version", "?")
+        ecosystem = v.get("ecosystem", "PyPI")
         ids = v.get("vuln_ids", [])
         findings.append(
             Finding(
                 id=ids[0] if ids else f"{package}-vuln",
                 source="dependency",
-                title=f"{package} {version} has {len(ids)} known vulnerabilit"
+                title=f"{package} {version} ({ecosystem}) has {len(ids)} known vulnerabilit"
                 + ("y" if len(ids) == 1 else "ies"),
                 severity=Severity.HIGH,
-                location=f"{package}=={version}",
+                location=f"{ecosystem}:{package}@{version}",
                 detail="Advisories: " + ", ".join(ids),
                 remediation=f"Upgrade {package} to a patched version; review {ids[0] if ids else 'the advisories'}.",
                 references=ids,
@@ -112,16 +137,21 @@ def severity_counts(findings: list[Finding]) -> dict[Severity, int]:
     return dict(sorted(counts.items(), key=lambda kv: kv[0], reverse=True))
 
 
-def assess(dependency_result: dict, static_result: dict) -> list[Finding]:
+def assess(
+    dependency_result: dict, static_result: dict, semgrep_result: dict | None = None
+) -> list[Finding]:
     """Full deterministic assessment: normalize, de-duplicate, and rank.
 
     Args:
-        dependency_result: Output of the MCP ``scan_requirements_file`` tool.
+        dependency_result: Output of the MCP ``scan_manifest`` tool.
         static_result: Output of the MCP ``run_static_analysis`` tool.
+        semgrep_result: Optional output of the MCP ``run_semgrep`` tool.
 
     Returns:
         Risk-ranked, de-duplicated findings (highest risk first).
     """
     findings = findings_from_dependency_scan(dependency_result)
     findings += findings_from_static_analysis(static_result)
+    if semgrep_result:
+        findings += findings_from_semgrep(semgrep_result)
     return score_findings(deduplicate(findings))

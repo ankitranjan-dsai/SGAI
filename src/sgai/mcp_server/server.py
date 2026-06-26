@@ -16,6 +16,7 @@ Run standalone with::
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,62 @@ async def scan_requirements_file(path: str, root: str) -> dict[str, Any]:
     return {"vulnerable": vulnerable, "clean": clean, "skipped": skipped}
 
 
+@mcp.tool()
+async def scan_manifest(path: str, root: str) -> dict[str, Any]:
+    """Audit any supported dependency manifest against OSV.dev.
+
+    Detects the ecosystem from the filename (requirements.txt → PyPI,
+    package-lock.json → npm, go.mod → Go, Cargo.lock → crates.io), parses the
+    pinned packages, and batch-queries OSV. This is the multi-language
+    generalization of ``scan_requirements_file``.
+
+    Args:
+        path: Path to the manifest (absolute or relative to ``root``).
+        root: Sandbox root; the file must resolve inside it.
+
+    Returns:
+        A dict with vulnerable packages (name, version, ecosystem, vuln_ids) and
+        a count of clean ones.
+    """
+    from sgai.manifests import parse_manifest
+
+    try:
+        manifest_path = safe_resolve(root, path)
+    except SandboxError as exc:
+        return {"error": str(exc)}
+
+    packages = parse_manifest(manifest_path)
+    if not packages:
+        return {"vulnerable": [], "clean_count": 0, "ecosystem": None}
+
+    queries = [
+        {"version": p["version"], "package": {"name": p["name"], "ecosystem": p["ecosystem"]}}
+        for p in packages
+    ]
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.post(OSV_QUERY_BATCH_URL, json={"queries": queries})
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+
+    vulnerable, clean_count = [], 0
+    for pkg, result in zip(packages, results):
+        ids = [v.get("id") for v in result.get("vulns", [])]
+        if ids:
+            vulnerable.append(
+                {
+                    "package": pkg["name"],
+                    "version": pkg["version"],
+                    "ecosystem": pkg["ecosystem"],
+                    "vuln_ids": ids,
+                }
+            )
+        else:
+            clean_count += 1
+
+    ecosystem = packages[0]["ecosystem"] if packages else None
+    return {"vulnerable": vulnerable, "clean_count": clean_count, "ecosystem": ecosystem}
+
+
 # --------------------------------------------------------------------------- #
 # Static analysis (Bandit)
 # --------------------------------------------------------------------------- #
@@ -169,6 +226,69 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
         for r in report.get("results", [])
     ]
     return {"findings": findings, "count": len(findings)}
+
+
+@mcp.tool()
+def run_semgrep(path: str, root: str) -> dict[str, Any]:
+    """Run Semgrep multi-language static analysis (JS, Go, Java, Ruby, and more).
+
+    Semgrep is invoked through ``uvx`` so no heavy dependency is required. If it
+    is unavailable, the tool degrades gracefully and reports that it was skipped
+    rather than failing the audit.
+
+    Args:
+        path: File or directory to analyze (absolute or relative to ``root``).
+        root: Sandbox root; the target must resolve inside it.
+
+    Returns:
+        A dict with multi-language findings, or ``skipped: True`` when Semgrep
+        could not run.
+    """
+    try:
+        target = safe_resolve(root, path)
+    except SandboxError as exc:
+        return {"error": str(exc)}
+
+    if shutil.which("semgrep"):
+        cmd = ["semgrep"]
+    elif shutil.which("uvx"):
+        cmd = ["uvx", "--from", "semgrep", "semgrep"]
+    else:
+        return {"findings": [], "skipped": True, "reason": "semgrep/uvx not available"}
+
+    try:
+        proc = subprocess.run(
+            [*cmd, "scan", "--config", "auto", "--json", "--quiet", str(target)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        report = json.loads(proc.stdout or "{}")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return {"findings": [], "skipped": True, "reason": "semgrep did not produce output"}
+
+    root_resolved = Path(root).resolve()
+
+    def _rel(p: str | None) -> str:
+        if not p:
+            return "?"
+        try:
+            return str(Path(p).resolve().relative_to(root_resolved))
+        except ValueError:
+            return p
+
+    findings = [
+        {
+            "check_id": r.get("check_id", "").split(".")[-1] or r.get("check_id"),
+            "message": (r.get("extra", {}) or {}).get("message", ""),
+            "severity": (r.get("extra", {}) or {}).get("severity", "INFO"),
+            "file": _rel(r.get("path")),
+            "line": (r.get("start", {}) or {}).get("line"),
+        }
+        for r in report.get("results", [])
+    ]
+    return {"findings": findings, "count": len(findings), "skipped": False}
 
 
 # --------------------------------------------------------------------------- #

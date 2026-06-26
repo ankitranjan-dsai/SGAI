@@ -4,7 +4,7 @@
 
 **Kaggle AI Agents Capstone — Track: Freestyle**
 
-SGAI points a team of specialist agents at any Python repository. They scan the source, audit dependencies against the live [OSV.dev](https://osv.dev) vulnerability database, run static analysis, score and de-duplicate the findings by severity, and generate a prioritized, remediation-ready security report — in minutes instead of weeks.
+SGAI points a team of specialist agents at any repository — local or a GitHub URL. They audit dependencies across **Python, JavaScript, Go, and Rust** against the live [OSV.dev](https://osv.dev) vulnerability database, run static analysis (Bandit, plus Semgrep multi-language with `--deep`), score and de-duplicate the findings by severity, and generate a prioritized, remediation-ready security report — in minutes instead of weeks.
 
 ---
 
@@ -97,6 +97,9 @@ uv run sgai scan ./examples/vulnerable_app
 
 # …or audit any public GitHub repo by URL:
 uv run sgai scan https://github.com/owner/repo
+
+# add --deep for Semgrep multi-language code analysis (JS, Go, Java, …):
+uv run sgai scan ./examples/multi_lang --deep
 
 # add a Gemini key for the multi-agent narrated report:
 cp .env.example .env         # then put your GOOGLE_API_KEY in .env

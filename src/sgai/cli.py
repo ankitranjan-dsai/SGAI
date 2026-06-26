@@ -33,17 +33,19 @@ _SEVERITY_STYLE = {
 }
 
 
-def _audit(repo_dir: str, label: str, output: str, explain: bool) -> int:
+def _audit(repo_dir: str, label: str, output: str, explain: bool, deep: bool) -> int:
     """Audit a local directory and write the report. Shared by path and URL scans."""
     console.print(f"[bold]SGAI[/bold] auditing [cyan]{label}[/cyan] …")
+    if deep:
+        console.print("[dim]Deep mode: running Semgrep multi-language analysis …[/dim]")
     if explain:
         # Deterministic scan, then the multi-agent narration layer writes the report.
         from sgai.agent_runner import run_agent_report
 
         console.print("[dim]Running multi-agent narration (triage → report) …[/dim]")
-        findings, report = asyncio.run(run_agent_report(repo_dir, label=label))
+        findings, report = asyncio.run(run_agent_report(repo_dir, label=label, deep=deep))
     else:
-        findings, report = asyncio.run(run_scan(repo_dir, label=label))
+        findings, report = asyncio.run(run_scan(repo_dir, label=label, deep=deep))
 
     if not findings:
         console.print("[green]✓ No vulnerabilities found.[/green]")
@@ -61,7 +63,7 @@ def _audit(repo_dir: str, label: str, output: str, explain: bool) -> int:
     return 0
 
 
-def _scan(path: str, output: str, explain: bool) -> int:
+def _scan(path: str, output: str, explain: bool, deep: bool) -> int:
     from sgai.github import CloneError, cloned_repo, is_remote
 
     # Remote repository: shallow-clone into a temp dir, then audit it.
@@ -69,7 +71,7 @@ def _scan(path: str, output: str, explain: bool) -> int:
         try:
             with cloned_repo(path) as repo_dir:
                 console.print(f"[dim]Cloned {path}[/dim]")
-                return _audit(str(repo_dir), path, output, explain)
+                return _audit(str(repo_dir), path, output, explain, deep)
         except CloneError as exc:
             console.print(f"[red]error:[/red] {exc}")
             return 1
@@ -79,7 +81,7 @@ def _scan(path: str, output: str, explain: bool) -> int:
     if not target.is_dir():
         console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
         return 1
-    return _audit(str(target), str(target), output, explain)
+    return _audit(str(target), str(target), output, explain, deep)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,10 +98,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use the multi-agent narration layer (Gemini) to write the report.",
     )
+    scan.add_argument(
+        "--deep",
+        action="store_true",
+        help="Also run Semgrep multi-language static analysis (JS, Go, Java, …).",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "scan":
-        return _scan(args.path, args.output, args.explain)
+        return _scan(args.path, args.output, args.explain, args.deep)
     parser.print_help()
     return 1
 

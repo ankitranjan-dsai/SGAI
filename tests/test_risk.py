@@ -38,7 +38,7 @@ def test_dependency_findings_default_high():
     findings = findings_from_dependency_scan(DEP_RESULT)
     assert len(findings) == 1
     assert findings[0].severity == Severity.HIGH
-    assert findings[0].location == "jinja2==2.11.2"
+    assert findings[0].location == "PyPI:jinja2@2.11.2"
     assert findings[0].references == ["GHSA-aaaa", "GHSA-bbbb"]
 
 
