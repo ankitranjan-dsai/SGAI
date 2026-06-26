@@ -2,6 +2,10 @@
 # Designed for Cloud Run (listens on $PORT, default 8080).
 FROM python:3.11-slim
 
+# git is needed to clone repos submitted by URL.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv for fast, reproducible installs from the committed lockfile.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 

@@ -95,6 +95,9 @@ uv sync                      # create venv + install dependencies
 # run a scan — deterministic core, NO API key required:
 uv run sgai scan ./examples/vulnerable_app
 
+# …or audit any public GitHub repo by URL:
+uv run sgai scan https://github.com/owner/repo
+
 # add a Gemini key for the multi-agent narrated report:
 cp .env.example .env         # then put your GOOGLE_API_KEY in .env
 uv run sgai scan ./examples/vulnerable_app --explain

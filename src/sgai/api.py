@@ -19,7 +19,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -35,6 +35,7 @@ _INDEX_HTML = (Path(__file__).parent / "web" / "index.html").read_text()
 class ScanRequest(BaseModel):
     requirements: str = ""  # contents of a requirements.txt
     code: str = ""  # a Python source file to statically analyze
+    github_url: str = ""  # a public repo URL / owner-repo to clone and audit
     explain: bool = False  # narrate the findings with the multi-agent layer
 
 
@@ -71,21 +72,38 @@ async def scan(req: ScanRequest) -> ScanResponse:
 
     Everything is written to an isolated temp directory that acts as the sandbox
     root, audited, and then removed — the service keeps no state between calls.
+    A ``github_url`` instead clones a public repo and audits it whole.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        dep_result: dict = {"vulnerable": [], "clean": [], "skipped": []}
-        if req.requirements.strip():
-            (root / "requirements.txt").write_text(req.requirements)
-            dep_result = await server.scan_requirements_file("requirements.txt", str(root))
+    label = "submitted code"
 
-        static_result: dict = {"findings": []}
-        if req.code.strip():
-            (root / "submitted.py").write_text(req.code)
-            static_result = server.run_static_analysis("submitted.py", str(root))
+    # Branch 1: audit a whole public repository by URL.
+    if req.github_url.strip():
+        from sgai.github import CloneError, cloned_repo
+        from sgai.runner import run_scan
 
-        findings = assess(dep_result, static_result)
-        report = build_markdown_report("submitted code", findings)
+        label = req.github_url.strip()
+        try:
+            with cloned_repo(label) as repo_dir:
+                findings, report = await run_scan(str(repo_dir), label=label)
+        except CloneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Branch 2: audit submitted requirements and/or code.
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dep_result: dict = {"vulnerable": [], "clean": [], "skipped": []}
+            if req.requirements.strip():
+                (root / "requirements.txt").write_text(req.requirements)
+                dep_result = await server.scan_requirements_file("requirements.txt", str(root))
+
+            static_result: dict = {"findings": []}
+            if req.code.strip():
+                (root / "submitted.py").write_text(req.code)
+                static_result = server.run_static_analysis("submitted.py", str(root))
+
+            findings = assess(dep_result, static_result)
+            report = build_markdown_report(label, findings)
 
     # Optionally let the multi-agent layer narrate the report. If no key is
     # configured or the model errors (e.g. rate limit), fall back to the
@@ -94,7 +112,7 @@ async def scan(req: ScanRequest) -> ScanResponse:
         try:
             from sgai.agent_runner import narrate_findings
 
-            report = await narrate_findings(findings, "submitted code")
+            report = await narrate_findings(findings, label)
         except Exception:  # noqa: BLE001 — never fail the scan over narration
             report += "\n\n_(AI narration unavailable — showing the deterministic report.)_"
 

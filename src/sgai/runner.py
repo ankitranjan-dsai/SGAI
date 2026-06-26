@@ -23,11 +23,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
 
 
-async def run_scan(repo: str) -> tuple[list[Finding], str]:
+async def run_scan(repo: str, label: str | None = None) -> tuple[list[Finding], str]:
     """Run a full deterministic audit of ``repo``.
 
     Args:
         repo: Path to the repository or directory to audit.
+        label: Display name for the report header (e.g. a GitHub URL); defaults
+            to ``repo``.
 
     Returns:
         A tuple of (ranked findings, Markdown report).
@@ -49,5 +51,5 @@ async def run_scan(repo: str) -> tuple[list[Finding], str]:
 
     # 3. Score, de-duplicate, rank, and report.
     findings = assess(dep_result, static_result)
-    report = build_markdown_report(repo, findings)
+    report = build_markdown_report(label or repo, findings)
     return findings, report

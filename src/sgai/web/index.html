@@ -28,6 +28,9 @@
     border-radius: 10px; padding: 12px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     resize: vertical; min-height: 96px;
   }
+  input.url { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; font: 14px ui-monospace, SFMono-Regular, monospace; }
+  .or { text-align: center; color: var(--muted); font-size: 13px; margin: 12px 0; }
   .row { display: flex; align-items: center; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
   .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
   button {
@@ -63,6 +66,11 @@
     <h1>SGAI <span class="sub">— SecureGuardAI</span></h1>
     <p class="lead">Paste your dependencies and/or code. SGAI audits them for known CVEs and unsafe patterns.</p>
   </header>
+
+  <label for="ghurl">GitHub repo URL <span style="color:var(--muted);font-weight:400">— scans the whole repo</span></label>
+  <input id="ghurl" class="url" type="text" spellcheck="false" placeholder="https://github.com/owner/repo" />
+
+  <div class="or">— or paste dependencies / code —</div>
 
   <label for="reqs">requirements.txt</label>
   <textarea id="reqs" spellcheck="false">jinja2==2.11.2
@@ -103,6 +111,7 @@ $("scan").addEventListener("click", async () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        github_url: $("ghurl").value,
         requirements: $("reqs").value,
         code: $("code").value,
         explain: $("explain").checked,

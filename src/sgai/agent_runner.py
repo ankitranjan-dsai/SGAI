@@ -36,7 +36,7 @@ def _finding_to_dict(f: Finding) -> dict:
     }
 
 
-async def run_agent_report(repo: str) -> tuple[list[Finding], str]:
+async def run_agent_report(repo: str, label: str | None = None) -> tuple[list[Finding], str]:
     """Gather findings deterministically, then narrate them with the agent layer.
 
     The deterministic core finds vulnerabilities with zero LLM calls; the
@@ -45,12 +45,13 @@ async def run_agent_report(repo: str) -> tuple[list[Finding], str]:
 
     Args:
         repo: Path to the repository to audit.
+        label: Display name for the report (e.g. a GitHub URL); defaults to repo.
 
     Returns:
         A tuple of (findings, agent-written Markdown report).
     """
-    findings, _ = await run_scan(repo)
-    report = await narrate_findings(findings, repo)
+    findings, _ = await run_scan(repo, label=label)
+    report = await narrate_findings(findings, label or repo)
     return findings, report
 
 
