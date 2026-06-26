@@ -33,7 +33,7 @@ _SEVERITY_STYLE = {
 }
 
 
-def _audit(repo_dir: str, label: str, output: str, explain: bool, deep: bool) -> int:
+def _audit(repo_dir: str, label: str, output: str, explain: bool, deep: bool, sarif: str | None) -> int:
     """Audit a local directory and write the report. Shared by path and URL scans."""
     console.print(f"[bold]SGAI[/bold] auditing [cyan]{label}[/cyan] …")
     if deep:
@@ -60,10 +60,15 @@ def _audit(repo_dir: str, label: str, output: str, explain: bool, deep: bool) ->
 
     Path(output).write_text(report)
     console.print(f"Report written to [bold]{output}[/bold]")
+    if sarif:
+        from sgai.sarif import to_sarif_json
+
+        Path(sarif).write_text(to_sarif_json(findings))
+        console.print(f"SARIF written to [bold]{sarif}[/bold]")
     return 0
 
 
-def _scan(path: str, output: str, explain: bool, deep: bool) -> int:
+def _scan(path: str, output: str, explain: bool, deep: bool, sarif: str | None) -> int:
     from sgai.github import CloneError, cloned_repo, is_remote
 
     # Remote repository: shallow-clone into a temp dir, then audit it.
@@ -71,7 +76,7 @@ def _scan(path: str, output: str, explain: bool, deep: bool) -> int:
         try:
             with cloned_repo(path) as repo_dir:
                 console.print(f"[dim]Cloned {path}[/dim]")
-                return _audit(str(repo_dir), path, output, explain, deep)
+                return _audit(str(repo_dir), path, output, explain, deep, sarif)
         except CloneError as exc:
             console.print(f"[red]error:[/red] {exc}")
             return 1
@@ -81,7 +86,7 @@ def _scan(path: str, output: str, explain: bool, deep: bool) -> int:
     if not target.is_dir():
         console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
         return 1
-    return _audit(str(target), str(target), output, explain, deep)
+    return _audit(str(target), str(target), output, explain, deep, sarif)
 
 
 def _fix(path: str, open_pr: bool, branch: str) -> int:
@@ -160,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also run Semgrep multi-language static analysis (JS, Go, Java, …).",
     )
+    scan.add_argument(
+        "--sarif", metavar="PATH", help="Also write findings as a SARIF 2.1.0 file."
+    )
 
     fix = sub.add_parser("fix", help="Propose dependency upgrades and optionally open a PR.")
     fix.add_argument("path", help="Local path or a GitHub URL / owner/repo.")
@@ -170,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "scan":
-        return _scan(args.path, args.output, args.explain, args.deep)
+        return _scan(args.path, args.output, args.explain, args.deep, args.sarif)
     if args.command == "fix":
         return _fix(args.path, args.open_pr, args.branch)
     parser.print_help()

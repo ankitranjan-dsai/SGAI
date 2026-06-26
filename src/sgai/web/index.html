@@ -56,6 +56,8 @@
   pre { white-space: pre-wrap; word-wrap: break-word; font: 12px/1.5 ui-monospace, monospace; color: var(--muted); }
   .err { color: var(--crit); margin-top: 12px; }
   .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  #log { margin-top: 10px; }
+  .logline { font: 13px/1.6 ui-monospace, SFMono-Regular, monospace; color: var(--muted); }
   footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 24px; }
   a { color: var(--accent); }
 </style>
@@ -90,6 +92,7 @@ yaml.load(raw)</textarea>
 
   <button id="scan">Scan for vulnerabilities</button>
   <div id="status" class="note"></div>
+  <div id="log"></div>
   <div id="results"></div>
 
   <footer>Powered by OSV.dev &amp; Bandit · SGAI runs statelessly — nothing you submit is stored.</footer>
@@ -99,15 +102,24 @@ yaml.load(raw)</textarea>
 const $ = (id) => document.getElementById(id);
 const sevOrder = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
 
+function logLine(text, done) {
+  const log = $("log");
+  const el = document.createElement("div");
+  el.className = "logline";
+  el.innerHTML = (done ? "✓ " : "… ") + esc(text);
+  log.appendChild(el);
+}
+
 $("scan").addEventListener("click", async () => {
   const btn = $("scan");
   const results = $("results");
   const status = $("status");
-  results.innerHTML = "";
+  const log = $("log");
+  results.innerHTML = ""; log.innerHTML = "";
   btn.disabled = true; btn.textContent = "Scanning…";
-  status.textContent = "Contacting SGAI…";
+  status.textContent = "";
   try {
-    const resp = await fetch("/scan", {
+    const resp = await fetch("/scan/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -117,10 +129,31 @@ $("scan").addEventListener("click", async () => {
         explain: $("explain").checked,
       }),
     });
-    if (!resp.ok) throw new Error("Server returned " + resp.status);
-    const data = await resp.json();
-    render(data);
-    status.textContent = "";
+    if (!resp.ok || !resp.body) throw new Error("Server returned " + resp.status);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const raw of lines) {
+        if (!raw.trim()) continue;
+        const ev = JSON.parse(raw);
+        if (ev.event === "stage" || ev.event === "agent") {
+          const label = (ev.name + (ev.detail ? " — " + ev.detail : ""));
+          if (ev.status === "running") logLine(label + " …", false);
+          else logLine(label, true);
+        } else if (ev.event === "error") {
+          status.innerHTML = '<div class="err">' + esc(ev.detail) + "</div>";
+        } else if (ev.event === "complete") {
+          render(ev);
+        }
+      }
+    }
   } catch (e) {
     status.innerHTML = '<div class="err">Scan failed: ' + e.message + "</div>";
   } finally {

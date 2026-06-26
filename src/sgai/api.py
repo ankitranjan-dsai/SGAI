@@ -16,11 +16,12 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from sgai.mcp_server import server
@@ -131,3 +132,97 @@ async def scan(req: ScanRequest) -> ScanResponse:
         ],
         report_markdown=report,
     )
+
+
+def _findings_out(findings) -> list[dict]:
+    return [
+        {
+            "id": f.id,
+            "source": f.source,
+            "severity": f.severity.label,
+            "location": f.location,
+            "title": f.title,
+            "remediation": f.remediation,
+        }
+        for f in findings
+    ]
+
+
+async def _scan_events(req: ScanRequest):
+    """Yield newline-delimited JSON progress events for a streaming scan."""
+
+    def line(obj: dict) -> str:
+        return json.dumps(obj) + "\n"
+
+    label = req.github_url.strip() or "submitted code"
+    report = ""
+
+    # Gather findings, streaming a stage event for each step.
+    if req.github_url.strip():
+        from sgai.github import CloneError, cloned_repo
+        from sgai.runner import run_scan
+
+        yield line({"event": "stage", "name": "clone", "status": "running", "detail": label})
+        try:
+            with cloned_repo(label) as repo_dir:
+                yield line({"event": "stage", "name": "clone", "status": "done"})
+                yield line({"event": "stage", "name": "audit", "status": "running"})
+                findings, report = await run_scan(str(repo_dir), label=label)
+        except CloneError as exc:
+            yield line({"event": "error", "detail": str(exc)})
+            return
+        yield line({"event": "stage", "name": "audit", "status": "done", "detail": f"{len(findings)} findings"})
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            yield line({"event": "stage", "name": "dependencies", "status": "running"})
+            dep_result: dict = {"vulnerable": []}
+            if req.requirements.strip():
+                (root / "requirements.txt").write_text(req.requirements)
+                dep_result = await server.scan_requirements_file("requirements.txt", str(root))
+            yield line({"event": "stage", "name": "dependencies", "status": "done",
+                        "detail": f"{len(dep_result.get('vulnerable', []))} vulnerable"})
+
+            yield line({"event": "stage", "name": "static analysis", "status": "running"})
+            static_result: dict = {"findings": []}
+            if req.code.strip():
+                (root / "submitted.py").write_text(req.code)
+                static_result = server.run_static_analysis("submitted.py", str(root))
+            yield line({"event": "stage", "name": "static analysis", "status": "done",
+                        "detail": f"{static_result.get('count', 0)} issues"})
+
+            findings = assess(dep_result, static_result)
+            report = build_markdown_report(label, findings)
+
+    # Optional multi-agent narration, streaming one event per agent.
+    if req.explain and findings:
+        try:
+            from google.adk.runners import InMemoryRunner
+            from google.genai import types
+
+            from sgai.agents.narrator import build_narration_pipeline
+
+            runner = InMemoryRunner(agent=build_narration_pipeline(), app_name="sgai")
+            await runner.session_service.create_session(app_name="sgai", user_id="u", session_id="s")
+            payload = json.dumps(_findings_out(findings), indent=2)
+            msg = types.Content(role="user", parts=[types.Part(text=f"Target: {label}\nFindings:\n{payload}")])
+            seen: set[str] = set()
+            async for ev in runner.run_async(user_id="u", session_id="s", new_message=msg):
+                author = getattr(ev, "author", None)
+                if author and author not in seen:
+                    seen.add(author)
+                    yield line({"event": "agent", "name": author, "status": "running"})
+                if ev.is_final_response() and ev.content and ev.content.parts:
+                    report = ev.content.parts[0].text or report
+            yield line({"event": "agent", "name": "narration", "status": "done"})
+        except Exception:  # noqa: BLE001 — narration is best-effort
+            yield line({"event": "agent", "name": "narration", "status": "skipped"})
+
+    yield line({"event": "complete", "finding_count": len(findings),
+                "findings": _findings_out(findings), "report_markdown": report})
+
+
+@app.post("/scan/stream")
+async def scan_stream(req: ScanRequest) -> StreamingResponse:
+    """Stream scan progress as newline-delimited JSON so the UI shows live work."""
+    return StreamingResponse(_scan_events(req), media_type="application/x-ndjson")
