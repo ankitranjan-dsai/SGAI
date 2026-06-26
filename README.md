@@ -101,6 +101,11 @@ uv run sgai scan https://github.com/owner/repo
 # add --deep for Semgrep multi-language code analysis (JS, Go, Java, …):
 uv run sgai scan ./examples/multi_lang --deep
 
+# preview dependency upgrades that fix the CVEs (dry run):
+uv run sgai fix ./examples/vulnerable_app
+# …and open a remediation PR on a repo you own:
+uv run sgai fix . --open-pr
+
 # add a Gemini key for the multi-agent narrated report:
 cp .env.example .env         # then put your GOOGLE_API_KEY in .env
 uv run sgai scan ./examples/vulnerable_app --explain

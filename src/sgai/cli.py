@@ -84,6 +84,63 @@ def _scan(path: str, output: str, explain: bool, deep: bool) -> int:
     return _audit(str(target), str(target), output, explain, deep)
 
 
+def _fix(path: str, open_pr: bool, branch: str) -> int:
+    from sgai.fix import apply_fixes, build_pr_body, plan_fixes
+    from sgai.github import CloneError, PRError, cloned_repo, is_remote, open_pull_request
+
+    def _plan_and_show(repo_dir: str) -> list:
+        fixes = asyncio.run(plan_fixes(repo_dir))
+        if not fixes:
+            console.print("[green]✓ No vulnerable PyPI pins to upgrade.[/green]")
+            return fixes
+        table = Table(title=f"{len(fixes)} dependency upgrade(s)")
+        table.add_column("Package")
+        table.add_column("From")
+        table.add_column("To", style="green")
+        for fx in fixes:
+            table.add_row(fx.package, fx.old_version, fx.new_version)
+        console.print(table)
+        return fixes
+
+    # Remote URL: dry-run only (can't push to a repo you don't own).
+    if is_remote(path):
+        if open_pr:
+            console.print("[red]error:[/red] --open-pr needs a local repo you can push to.")
+            return 1
+        try:
+            with cloned_repo(path) as repo_dir:
+                _plan_and_show(str(repo_dir))
+        except CloneError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            return 1
+        console.print("[dim]Dry run — clone the repo locally and re-run with --open-pr.[/dim]")
+        return 0
+
+    target = Path(path).resolve()
+    if not target.is_dir():
+        console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
+        return 1
+    fixes = _plan_and_show(str(target))
+    if not fixes:
+        return 0
+
+    if not open_pr:
+        console.print("\n[bold]PR preview[/bold]:\n" + build_pr_body(fixes))
+        console.print("\n[dim]Dry run — re-run with --open-pr to open the pull request.[/dim]")
+        return 0
+
+    apply_fixes(str(target), fixes)
+    try:
+        url = open_pull_request(
+            str(target), branch, "SGAI: upgrade vulnerable dependencies", build_pr_body(fixes)
+        )
+    except PRError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        return 1
+    console.print(f"[green]Opened PR:[/green] {url}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sgai", description="Multi-agent security review.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -104,9 +161,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Also run Semgrep multi-language static analysis (JS, Go, Java, …).",
     )
 
+    fix = sub.add_parser("fix", help="Propose dependency upgrades and optionally open a PR.")
+    fix.add_argument("path", help="Local path or a GitHub URL / owner/repo.")
+    fix.add_argument(
+        "--open-pr", action="store_true", help="Open a pull request (local repo you own)."
+    )
+    fix.add_argument("--branch", default="sgai/dependency-fixes", help="Branch name for the PR.")
+
     args = parser.parse_args(argv)
     if args.command == "scan":
         return _scan(args.path, args.output, args.explain, args.deep)
+    if args.command == "fix":
+        return _fix(args.path, args.open_pr, args.branch)
     parser.print_help()
     return 1
 
