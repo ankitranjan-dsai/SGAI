@@ -9,9 +9,13 @@ report stands on its own.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sgai.models import Finding, Severity
 from sgai.risk import severity_counts
+
+if TYPE_CHECKING:
+    from sgai.memory import ScanDiff
 
 _SEVERITY_EMOJI = {
     Severity.CRITICAL: "🔴",
@@ -22,10 +26,42 @@ _SEVERITY_EMOJI = {
 }
 
 
+def _changes_section(diff: "ScanDiff") -> list[str]:
+    """Render the 'Changes since last scan' block from a memory diff."""
+    lines = ["## Changes since last scan", ""]
+    if diff.is_first_scan:
+        lines += ["_First recorded scan of this target — establishing a baseline._", ""]
+        return lines
+
+    lines += [
+        f"_Compared against the scan from {diff.previous_at}._",
+        "",
+        f"- 🆕 **New:** {len(diff.new)}",
+        f"- ✅ **Fixed:** {len(diff.resolved)}",
+        f"- ♻️ **Still open:** {len(diff.persisting)}",
+    ]
+    if diff.accepted:
+        lines.append(f"- 🤝 **Accepted risks present:** {len(diff.accepted)}")
+    lines.append("")
+
+    if diff.new:
+        lines += ["**Newly introduced:**", ""]
+        for f in diff.new:
+            lines.append(f"- {_SEVERITY_EMOJI[f.severity]} {f.id} — `{f.location}`")
+        lines.append("")
+    if diff.resolved:
+        lines += ["**Fixed since last scan:**", ""]
+        for meta in diff.resolved:
+            lines.append(f"- {meta.get('id', '?')} — `{meta.get('location', '?')}`")
+        lines.append("")
+    return lines
+
+
 def build_markdown_report(
     target: str,
     findings: list[Finding],
     generated_at: datetime | None = None,
+    diff: "ScanDiff | None" = None,
 ) -> str:
     """Render a Markdown security report.
 
@@ -33,6 +69,8 @@ def build_markdown_report(
         target: The audited path or repository, shown in the header.
         findings: Risk-ranked findings (highest first).
         generated_at: Timestamp for the report; defaults to now (UTC).
+        diff: Optional change set vs. the previous recorded scan; when given, a
+            "Changes since last scan" section is added.
 
     Returns:
         The full report as a Markdown string.
@@ -53,7 +91,12 @@ def build_markdown_report(
 
     if not findings:
         lines += ["✅ No vulnerabilities found.", ""]
+        if diff is not None:
+            lines += _changes_section(diff)
         return "\n".join(lines)
+
+    if diff is not None:
+        lines += _changes_section(diff)
 
     lines += ["| Severity | Count |", "|---|---|"]
     for sev, count in counts.items():

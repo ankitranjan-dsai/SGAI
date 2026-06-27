@@ -61,7 +61,7 @@ A security audit is naturally parallel and specialized. No single prompt can sim
 
 All security tooling (CVE lookups, static analysis, sandboxed file reads) is exposed through a **custom MCP server** that the agents call as tools. This keeps the security capabilities cleanly decoupled, independently testable, and reusable by any MCP-compatible client.
 
-## Required course concepts demonstrated — all 6
+## Required course concepts demonstrated — all 6, plus Sessions & Memory
 
 | Concept | How SGAI demonstrates it |
 |---|---|
@@ -71,6 +71,21 @@ All security tooling (CVE lookups, static analysis, sandboxed file reads) is exp
 | **Deployability** | Stateless FastAPI service (`src/sgai/api.py`) + Dockerfile, Cloud Run ready — see [docs/deploy.md](docs/deploy.md) |
 | **Agent skills / Agents CLI** | Packaged as the `sgai` CLI and a reusable skill ([SKILL.md](SKILL.md)); installable with `uv tool install` |
 | **Antigravity** | Security MCP server plugs into Antigravity (and any MCP agent) — see [docs/integrations.md](docs/integrations.md) |
+| **Sessions & Memory** *(course Day 3)* | Persistent per-target scan memory (`src/sgai/memory.py`) reports what's **new / fixed / still open** since the last scan and remembers accepted risks; also exposed as a real ADK `MemoryService` so agents can recall prior scans via the `load_memory` tool |
+
+## Memory — "what changed since last scan?"
+
+A one-off report tells you what's wrong *now*. SGAI also **remembers every scan of a target** and answers the question teams actually ask at standup: *what changed?*
+
+```bash
+uv run sgai scan ./myproject           # 1st run: saves a baseline
+# …fix some deps, introduce others…
+uv run sgai scan ./myproject           # 2nd run: "3 new · 1 fixed · 8 still open"
+uv run sgai history ./myproject        # the full scan timeline
+uv run sgai accept ./myproject CVE-... --reason "patch scheduled Q3"
+```
+
+Every report gains a **Changes since last scan** section; accepted risks stop being flagged as new. Memory lives in `~/.sgai/` (override with `$SGAI_HOME`); GitHub-URL targets are tracked by URL, so the web app and the deployed service remember repos across scans too.
 
 ## Status
 
@@ -83,6 +98,7 @@ See [docs/architecture.md](docs/architecture.md) for the build roadmap.
 - [x] Risk scoring + Markdown report generation
 - [x] `sgai scan` runs end-to-end (deterministic core, no API key required)
 - [x] Agent-driven report via `sgai scan --explain` (triage → report agents, Gemini)
+- [x] Sessions & Memory — cross-scan diff, history, accepted risks (`sgai history` / `sgai accept`)
 - [ ] Optional: GitHub PR creation
 - [ ] Deployment (Cloud Run) + demo
 

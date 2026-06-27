@@ -34,7 +34,21 @@ sgai scan <target> --sarif out.sarif
 # Propose dependency upgrades (dry run) or open a remediation PR:
 sgai fix <target>
 sgai fix . --open-pr
+
+# Memory — track a target across scans:
+sgai scan <target>              # records a baseline / diffs against the last scan
+sgai history <target>           # show the scan timeline (new/fixed over time)
+sgai accept <target> <id>       # mark a finding as an accepted risk
+sgai scan <target> --no-memory  # one-off scan, don't record
 ```
+
+## Memory
+
+SGAI remembers every scan of a target and, on each subsequent scan, reports what
+is **new**, **fixed**, or **still open** since last time — and suppresses
+findings marked as accepted risks. Use this when asked "what changed?", "is this
+getting better or worse?", or "ignore this known issue". History is stored under
+`~/.sgai/` (override with `$SGAI_HOME`).
 
 ## How to invoke (MCP tools)
 

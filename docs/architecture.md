@@ -54,7 +54,21 @@ limits. Run it with `sgai scan <repo> --explain`.
 ### 3. CLI (`src/sgai/cli.py`)
 
 `sgai scan <repo>` runs the deterministic audit; add `--explain` to write the
-report with the multi-agent narration layer.
+report with the multi-agent narration layer. `sgai history <repo>` and
+`sgai accept <repo> <id>` drive the memory layer below.
+
+### 4. Sessions & Memory (`src/sgai/memory.py`)
+
+`ScanMemory` is a JSON-backed, per-target store of every scan plus a list of
+accepted risks. Each scan computes a `ScanDiff` against the previous snapshot —
+**new / fixed / still-open** findings — which flows into the report, the CLI
+banner, and the API/UI. Findings are matched across scans by a stable
+`fingerprint` (source + id + location), so an upgrade reads as "fixed" and a
+freshly-introduced CVE reads as "new". `SgaiMemoryService` adapts the same store
+to ADK's `BaseMemoryService` contract, so the agent layer can persist a session
+and recall it later through the built-in `load_memory` tool. Storage lives under
+`~/.sgai/` (override with `$SGAI_HOME`); remote targets are keyed by URL so the
+deployed service tracks repos across calls.
 
 ## Required course concepts
 
@@ -63,6 +77,8 @@ report with the multi-agent narration layer.
 2. **MCP Server** — the custom security toolbox above.
 3. **Security features** — path sandboxing, least-privilege GitHub token,
    input validation, auditable findings.
+4. **Sessions & Memory** (course Day 3) — persistent per-target scan memory with
+   cross-scan diffing and an ADK `MemoryService` adapter (`memory.py`).
 
 ## Build roadmap
 
@@ -78,5 +94,8 @@ report with the multi-agent narration layer.
 - [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
 - [x] **M4.5 — Live agent run:** multi-agent narration (`agents/narrator.py`,
   `agent_runner.py`) writes the report via Gemini; `sgai scan --explain`.
+- [x] **M6 — Sessions & Memory:** `memory.py` — persistent per-target scan
+  history, new/fixed/still-open diffing in every report, accepted risks
+  (`sgai history` / `sgai accept`), and an ADK `MemoryService` adapter.
 - [~] **M5 — Deploy + demo:** stateless FastAPI service (`api.py`) + Dockerfile +
   Cloud Run docs (`docs/deploy.md`) done; demo video remains.

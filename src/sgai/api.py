@@ -38,6 +38,7 @@ class ScanRequest(BaseModel):
     code: str = ""  # a Python source file to statically analyze
     github_url: str = ""  # a public repo URL / owner-repo to clone and audit
     explain: bool = False  # narrate the findings with the multi-agent layer
+    remember: bool = True  # track this target across scans (repo URLs only)
 
 
 class FindingOut(BaseModel):
@@ -53,6 +54,7 @@ class ScanResponse(BaseModel):
     finding_count: int
     findings: list[FindingOut]
     report_markdown: str
+    changes: dict | None = None  # diff vs. the previous recorded scan, if tracked
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -76,16 +78,22 @@ async def scan(req: ScanRequest) -> ScanResponse:
     A ``github_url`` instead clones a public repo and audits it whole.
     """
     label = "submitted code"
+    diff = None
 
     # Branch 1: audit a whole public repository by URL.
     if req.github_url.strip():
         from sgai.github import CloneError, cloned_repo
+        from sgai.memory import ScanMemory
         from sgai.runner import run_scan
 
         label = req.github_url.strip()
+        # Repo URLs are a stable identity, so we can track them across scans.
+        memory = ScanMemory() if req.remember else None
         try:
             with cloned_repo(label) as repo_dir:
-                findings, report = await run_scan(str(repo_dir), label=label)
+                findings, report, diff = await run_scan(
+                    str(repo_dir), label=label, memory=memory
+                )
         except CloneError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -131,6 +139,7 @@ async def scan(req: ScanRequest) -> ScanResponse:
             for f in findings
         ],
         report_markdown=report,
+        changes=diff.summary() if diff is not None else None,
     )
 
 
@@ -156,22 +165,29 @@ async def _scan_events(req: ScanRequest):
 
     label = req.github_url.strip() or "submitted code"
     report = ""
+    diff = None
 
     # Gather findings, streaming a stage event for each step.
     if req.github_url.strip():
         from sgai.github import CloneError, cloned_repo
+        from sgai.memory import ScanMemory
         from sgai.runner import run_scan
 
+        memory = ScanMemory() if req.remember else None
         yield line({"event": "stage", "name": "clone", "status": "running", "detail": label})
         try:
             with cloned_repo(label) as repo_dir:
                 yield line({"event": "stage", "name": "clone", "status": "done"})
                 yield line({"event": "stage", "name": "audit", "status": "running"})
-                findings, report = await run_scan(str(repo_dir), label=label)
+                findings, report, diff = await run_scan(
+                    str(repo_dir), label=label, memory=memory
+                )
         except CloneError as exc:
             yield line({"event": "error", "detail": str(exc)})
             return
         yield line({"event": "stage", "name": "audit", "status": "done", "detail": f"{len(findings)} findings"})
+        if diff is not None:
+            yield line({"event": "memory", "status": "done", "changes": diff.summary()})
     else:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -219,7 +235,8 @@ async def _scan_events(req: ScanRequest):
             yield line({"event": "agent", "name": "narration", "status": "skipped"})
 
     yield line({"event": "complete", "finding_count": len(findings),
-                "findings": _findings_out(findings), "report_markdown": report})
+                "findings": _findings_out(findings), "report_markdown": report,
+                "changes": diff.summary() if diff is not None else None})
 
 
 @app.post("/scan/stream")
