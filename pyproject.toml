@@ -21,7 +21,11 @@ dependencies = [
 [project.scripts]
 sgai = "sgai.cli:main"
 
-[project.optional-dependencies]
+# Dev tooling lives in a PEP 735 dependency group so `uv sync` installs it by
+# default — keeping the documented `uv sync && uv run pytest` reproducible for
+# judges with no extra flags. (Optional-dependency *extras* are NOT installed by
+# a plain `uv sync`, which silently breaks the test command.)
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
