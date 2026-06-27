@@ -35,6 +35,20 @@ Paste a `requirements.txt` and/or some code, tap **Scan**, and get a ranked repo
 
 ---
 
+## Try the demo (30 seconds)
+
+A self-contained, intentionally-vulnerable repo lives at
+[`examples/kaggle_demo_repo`](examples/kaggle_demo_repo) — PyPI + npm + Go
+dependency CVEs, unsafe Python for Bandit, and an insecure `server.js` for
+Semgrep. No API key required.
+
+```bash
+uv run sgai scan ./examples/kaggle_demo_repo            # 23 findings (deps + Bandit)
+uv run sgai scan ./examples/kaggle_demo_repo --deep     # 32 findings (+ Semgrep)
+uv run sgai scan ./examples/kaggle_demo_repo --sarif out.sarif
+uv run sgai history ./examples/kaggle_demo_repo         # the scan timeline
+```
+
 ## Why agents?
 
 A security audit is naturally parallel and specialized. No single prompt can simultaneously enumerate source files, query a CVE database, run a static analyzer, reason about exploitability, and write patches. SGAI gives each of those jobs to a dedicated agent and coordinates them with an orchestrator — which is exactly what makes the multi-agent architecture *necessary* rather than decorative.

@@ -2,9 +2,12 @@
 
 ## Overview
 
-SGAI audits a Python repository for security vulnerabilities using a
-team of specialist agents coordinated by an orchestrator. The agents reach the
-outside world only through a custom MCP server, which mediates and sandboxes
+SGAI is a **Python-first** security reviewer: it runs Bandit static analysis on
+Python source, audits dependency manifests across **multiple ecosystems**
+(PyPI, npm, Go, crates.io) against OSV.dev, and — with `--deep` — adds optional
+**Semgrep** multi-language static analysis (JavaScript, Go, Java, …). A team of
+specialist agents, coordinated by an orchestrator, drives the audit and reaches
+the outside world only through a custom MCP server, which mediates and sandboxes
 every CVE lookup, static-analysis run, and file read.
 
 ## Components
@@ -17,7 +20,9 @@ A standalone MCP server exposing the security toolbox:
 |---|---|---|
 | `scan_dependency` | Check one package for CVEs | OSV.dev `/v1/query` |
 | `scan_requirements_file` | Audit a whole requirements.txt | OSV.dev `/v1/querybatch` |
-| `run_static_analysis` | Find unsafe code patterns | Bandit |
+| `scan_manifest` | Audit any supported manifest (PyPI/npm/Go/crates.io) | OSV.dev + `manifests.py` |
+| `run_static_analysis` | Find unsafe Python code patterns | Bandit |
+| `run_semgrep` | Multi-language static analysis (optional, `--deep`) | Semgrep via `uvx` |
 | `list_source_files` | Enumerate sources (sandboxed) | filesystem |
 | `read_source_file` | Read one source file (sandboxed) | filesystem |
 

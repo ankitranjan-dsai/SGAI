@@ -29,8 +29,11 @@ from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
 mcp = FastMCP("sgai-security-tools")
 
-# File extensions we consider "source" worth scanning.
-SOURCE_EXTENSIONS = {".py"}
+# File extensions the `list_source_files` tool surfaces for review. Bandit
+# static analysis is Python-only; Semgrep (--deep) covers the rest, so we let
+# agents enumerate source across the languages SGAI's dependency + Semgrep
+# scanning understands.
+SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".go", ".rs", ".java"}
 
 
 # --------------------------------------------------------------------------- #
