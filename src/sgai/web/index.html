@@ -148,16 +148,29 @@ function logLine(text, done) {
   log.appendChild(el);
 }
 
+// SGAI's web app talks to its own FastAPI backend over relative URLs, which
+// only resolve when the page is *served* by that backend. If it's opened
+// directly (file://) or inside a preview pane (about:srcdoc), there's no origin
+// to resolve against — so explain how to run it instead of failing cryptically.
+const SERVED = location.protocol === "http:" || location.protocol === "https:";
+const API = (path) => new URL(path, location.origin).href;
+
 $("scan").addEventListener("click", async () => {
   const btn = $("scan");
   const results = $("results");
   const status = $("status");
   const log = $("log");
   results.innerHTML = ""; log.innerHTML = "";
-  btn.disabled = true; btn.textContent = "Scanning…";
   status.textContent = "";
+  if (!SERVED) {
+    status.innerHTML = '<div class="err">This page needs SGAI\'s backend. Start it with ' +
+      '<code>./run.sh</code> (or <code>uv run uvicorn sgai.api:app --port 8080</code>) and open ' +
+      '<a href="http://localhost:8080">http://localhost:8080</a> — don\'t open the HTML file directly.</div>';
+    return;
+  }
+  btn.disabled = true; btn.textContent = "Scanning…";
   try {
-    const resp = await fetch("/scan/stream", {
+    const resp = await fetch(API("/scan/stream"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
