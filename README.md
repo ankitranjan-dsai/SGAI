@@ -76,12 +76,22 @@ See [docs/architecture.md](docs/architecture.md).
 | **Antigravity** | Security MCP server plugs into Antigravity (and any MCP agent) — see [docs/integrations.md](docs/integrations.md) |
 | **Sessions & Memory** *(course Day 3)* | Persistent per-target scan memory (`src/sgai/memory.py`) reports **new / fixed / still open** since the last scan and remembers accepted risks; also exposed as a real ADK `MemoryService` so agents can recall prior scans via `load_memory` |
 
-## Quick start — one command
+## Quick start
 
-**macOS / Linux:** `./run.sh`   ·   **Windows (PowerShell):** `./run.ps1`
+**Just double-click — no terminal needed:**
 
-The script installs everything it needs (via [`uv`](https://docs.astral.sh/uv/)),
-starts SGAI, and opens **http://localhost:8080**.
+| OS | Double-click | Or from a terminal |
+|---|---|---|
+| **macOS** | `run.command` | `./run.sh` |
+| **Windows** | `run.bat` | `./run.ps1` (PowerShell) |
+| **Linux** | — | `./run.sh` |
+
+Any of these installs everything it needs (via [`uv`](https://docs.astral.sh/uv/)),
+starts SGAI, and opens **http://localhost:8080** once the server is ready.
+
+> First macOS double-click: if you see "unidentified developer", right-click
+> `run.command` → **Open** → **Open** (only needed once). On Windows, `run.bat`
+> handles the PowerShell execution policy for you.
 
 ## Web demo
 
