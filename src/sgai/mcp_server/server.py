@@ -119,6 +119,38 @@ async def scan_requirements_file(path: str, root: str) -> dict[str, Any]:
     return {"vulnerable": vulnerable, "clean": clean, "skipped": skipped}
 
 
+# OSV's querybatch accepts up to 1000 entries; stay well under and keep payloads
+# small so a single large lockfile can't trip request-size limits.
+_OSV_BATCH_SIZE = 100
+
+
+async def _osv_query_chunk(client: httpx.AsyncClient, chunk: list[dict]) -> list[dict]:
+    """Query a chunk against OSV's batch endpoint, resilient to a bad entry.
+
+    Returns a list of per-package result dicts aligned to ``chunk``. If the batch
+    request fails (e.g. one malformed pin yields a 400), it retries each package
+    individually so the rest of the chunk still produces findings.
+    """
+    queries = [
+        {"version": p["version"], "package": {"name": p["name"], "ecosystem": p["ecosystem"]}}
+        for p in chunk
+    ]
+    try:
+        resp = await client.post(OSV_QUERY_BATCH_URL, json={"queries": queries})
+        resp.raise_for_status()
+        return resp.json().get("results", [{}] * len(chunk))
+    except httpx.HTTPError:
+        results: list[dict] = []
+        for q in queries:
+            try:
+                resp = await client.post(OSV_QUERY_URL, json=q)
+                resp.raise_for_status()
+                results.append(resp.json())
+            except httpx.HTTPError:
+                results.append({})  # skip an un-queryable package, don't fail the scan
+        return results
+
+
 @mcp.tool()
 async def scan_manifest(path: str, root: str) -> dict[str, Any]:
     """Audit any supported dependency manifest against OSV.dev.
@@ -143,36 +175,39 @@ async def scan_manifest(path: str, root: str) -> dict[str, Any]:
     except SandboxError as exc:
         return {"error": str(exc)}
 
-    packages = parse_manifest(manifest_path)
+    # Keep only pins OSV can resolve: a real name and a concrete version. Lockfiles
+    # carry non-semver specifiers (file:, link:, workspace:, git+ssh://, npm aliases)
+    # that OSV rejects with a 400 — drop them rather than poison the whole batch.
+    packages = [
+        p
+        for p in parse_manifest(manifest_path)
+        if p.get("name") and p.get("version") and ":" not in p["version"]
+    ]
     if not packages:
         return {"vulnerable": [], "clean_count": 0, "ecosystem": None}
 
-    queries = [
-        {"version": p["version"], "package": {"name": p["name"], "ecosystem": p["ecosystem"]}}
-        for p in packages
-    ]
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        resp = await client.post(OSV_QUERY_BATCH_URL, json={"queries": queries})
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
-
     vulnerable, clean_count = [], 0
-    for pkg, result in zip(packages, results):
-        ids = [v.get("id") for v in result.get("vulns", [])]
-        if ids:
-            vulnerable.append(
-                {
-                    "package": pkg["name"],
-                    "version": pkg["version"],
-                    "ecosystem": pkg["ecosystem"],
-                    "vuln_ids": ids,
-                }
-            )
-        else:
-            clean_count += 1
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        # Chunk well under OSV's batch ceiling; a failed chunk falls back to
+        # per-package queries so one bad entry can't drop the whole chunk.
+        for start in range(0, len(packages), _OSV_BATCH_SIZE):
+            chunk = packages[start : start + _OSV_BATCH_SIZE]
+            results = await _osv_query_chunk(client, chunk)
+            for pkg, result in zip(chunk, results):
+                ids = [v.get("id") for v in (result or {}).get("vulns", [])]
+                if ids:
+                    vulnerable.append(
+                        {
+                            "package": pkg["name"],
+                            "version": pkg["version"],
+                            "ecosystem": pkg["ecosystem"],
+                            "vuln_ids": ids,
+                        }
+                    )
+                else:
+                    clean_count += 1
 
-    ecosystem = packages[0]["ecosystem"] if packages else None
-    return {"vulnerable": vulnerable, "clean_count": clean_count, "ecosystem": ecosystem}
+    return {"vulnerable": vulnerable, "clean_count": clean_count, "ecosystem": packages[0]["ecosystem"]}
 
 
 # --------------------------------------------------------------------------- #
