@@ -38,8 +38,18 @@
     padding: 14px 20px; font-size: 16px; font-weight: 700; cursor: pointer; width: 100%;
   }
   button:disabled { opacity: .6; cursor: progress; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border);
+    padding: 10px 14px; font-size: 14px; margin-top: 10px; }
+  .hero { font-size: 16px; color: var(--text); margin: 6px 0 2px; font-weight: 600; }
+  .hero b { color: var(--accent); }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .badge { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+  .badge b { color: var(--accent); font-weight: 700; }
+  .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 22px 0 6px; }
   .changes { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 14px; margin: 18px 0 4px; font-size: 14px; color: var(--text); }
+    padding: 10px 14px; margin: 6px 0 4px; font-size: 14px; color: var(--text); }
   .changes b { color: var(--accent); }
   .summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 8px; }
   .chip { padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; color: #0b1220; }
@@ -69,7 +79,16 @@
 <div class="wrap">
   <header>
     <h1>SGAI <span class="sub">— SecureGuardAI</span></h1>
-    <p class="lead">Paste your dependencies and/or code. SGAI audits them for known CVEs and unsafe patterns.</p>
+    <p class="hero">Most AI coding tools generate code. <b>SGAI checks whether that code is safe.</b></p>
+    <p class="lead">A multi-agent security reviewer: paste dependencies or code (or a GitHub URL) and get CVEs, unsafe patterns, and fixes.</p>
+    <div class="badges">
+      <span class="badge"><b>Multi-agent</b> ADK</span>
+      <span class="badge"><b>MCP</b> Server</span>
+      <span class="badge">OSV.dev CVEs</span>
+      <span class="badge">Bandit + Semgrep</span>
+      <span class="badge">Scan Memory</span>
+      <span class="badge">Deployable</span>
+    </div>
   </header>
 
   <label for="ghurl">GitHub repo URL <span style="color:var(--muted);font-weight:400">— scans the whole repo</span></label>
@@ -89,6 +108,8 @@ subprocess.call(user_input, shell=True)
 eval(expr)
 yaml.load(raw)</textarea>
 
+  <button id="sample" class="secondary" type="button">Use sample vulnerable input</button>
+
   <div class="row">
     <label class="check"><input type="checkbox" id="explain" /> AI-narrated report (needs Gemini key on server)</label>
   </div>
@@ -98,12 +119,26 @@ yaml.load(raw)</textarea>
   <div id="log"></div>
   <div id="results"></div>
 
-  <footer>Powered by OSV.dev &amp; Bandit · SGAI runs statelessly — nothing you submit is stored.</footer>
+  <footer>Powered by OSV.dev · Bandit · Semgrep · Pasted code is scanned in a throwaway temp dir and never stored.</footer>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const sevOrder = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
+
+// Fill the form with known-vulnerable sample input so judges get a rich,
+// non-empty scan with one click.
+$("sample").addEventListener("click", () => {
+  $("ghurl").value = "";
+  $("reqs").value = "jinja2==2.11.2\nPyYAML==5.3.1\nrequests==2.19.1\nflask==0.12.2\nurllib3==1.24.1";
+  $("code").value =
+    'import subprocess, yaml, hashlib\n' +
+    'API_PASSWORD = "supersecret123"        # hardcoded secret\n' +
+    'subprocess.call(user_input, shell=True) # shell injection\n' +
+    'eval(expr)                              # arbitrary code execution\n' +
+    'yaml.load(raw)                          # unsafe deserialization\n' +
+    'hashlib.md5(pw.encode())               # weak hash';
+});
 
 function logLine(text, done) {
   const log = $("log");
@@ -176,10 +211,15 @@ function changesBanner(c) {
   return s + "</div>";
 }
 
+function changesSection(c) {
+  if (!c) return "";
+  return '<div class="section-title">Changes since last scan</div>' + changesBanner(c);
+}
+
 function render(data) {
   const results = $("results");
   if (!data.finding_count) {
-    results.innerHTML = changesBanner(data.changes) +
+    results.innerHTML = changesSection(data.changes) +
       '<p style="color:#22c55e">✓ No vulnerabilities found.</p>';
     return;
   }
@@ -187,11 +227,17 @@ function render(data) {
   data.findings.forEach((f) => (counts[f.severity] = (counts[f.severity] || 0) + 1));
   const order = Object.keys(counts).sort((a, b) => sevOrder[b] - sevOrder[a]);
 
-  let html = changesBanner(data.changes);
+  let html = changesSection(data.changes);
+
+  // Risk Summary
+  html += '<div class="section-title">Risk summary</div>';
+  html += `<div class="changes">${data.finding_count} finding${data.finding_count === 1 ? "" : "s"} across dependencies and code.</div>`;
   html += '<div class="summary">';
   html += order.map((s) => `<span class="chip ${s}">${s}: ${counts[s]}</span>`).join("");
   html += "</div>";
 
+  // Findings & recommended fixes
+  html += '<div class="section-title">Findings &amp; recommended fixes</div>';
   data.findings
     .sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity])
     .forEach((f) => {
@@ -202,7 +248,9 @@ function render(data) {
       </div>`;
     });
 
+  // Full Markdown report
   if (data.report_markdown) {
+    html += '<div class="section-title">Full report</div>';
     html += `<details><summary>Full report (Markdown)</summary><pre>${esc(data.report_markdown)}</pre></details>`;
   }
   results.innerHTML = html;
