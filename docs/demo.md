@@ -16,8 +16,10 @@ uv run pytest -q        # expect: 30 passed
 uv run sgai scan ./examples/kaggle_demo_repo
 ```
 
-Expect ~23 findings: PyPI + npm + Go CVEs (OSV.dev) and Python unsafe patterns
-(Bandit), risk-ranked, written to `sgai_report.md`.
+Expect a rich, non-empty report — typically ~20+ findings: PyPI + npm + Go CVEs
+(OSV.dev) and Python unsafe patterns (Bandit), risk-ranked, written to
+`sgai_report.md`. (Exact counts shift over time as OSV.dev publishes new
+advisories, so treat the number as approximate.)
 
 ## 2. Deep scan (adds Semgrep multi-language SAST)
 
@@ -25,8 +27,8 @@ Expect ~23 findings: PyPI + npm + Go CVEs (OSV.dev) and Python unsafe patterns
 uv run sgai scan ./examples/kaggle_demo_repo --deep
 ```
 
-Expect ~32 findings — the extra ones are Semgrep flags, including the insecure
-`server.js`.
+Semgrep adds additional findings when available — including the insecure
+`server.js` — so the deep report is noticeably larger than the default scan.
 
 ## 3. SARIF export (GitHub code scanning / IDEs)
 

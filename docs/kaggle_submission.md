@@ -36,7 +36,8 @@ Only 3 are required; SGAI demonstrates 6 + Sessions & Memory.
   writes code, nobody security-reviews it); clear before/after; live demo.
 - **Technical implementation / architecture / code (50):** 7 concepts, custom
   MCP server, multi-agent ADK pipeline, deterministic core + LLM narration,
-  30 passing tests, SARIF, CI workflow.
+  30 passing tests, SARIF, and two GitHub Actions workflows (a test/lint CI and
+  a security-audit workflow that uploads SARIF).
 - **Documentation (20):** structured README + `docs/` (architecture, security,
   mcp, deploy, demo, integrations) + an intentionally-vulnerable demo repo.
 
@@ -45,8 +46,8 @@ Only 3 are required; SGAI demonstrates 6 + Sessions & Memory.
 ```bash
 uv sync
 uv run pytest -q                                  # 30 passed
-uv run sgai scan ./examples/kaggle_demo_repo      # ~23 findings
-uv run sgai scan ./examples/kaggle_demo_repo --deep   # ~32 findings
+uv run sgai scan ./examples/kaggle_demo_repo      # rich report (~20+ findings)
+uv run sgai scan ./examples/kaggle_demo_repo --deep   # + Semgrep adds more
 ./run.sh                                           # web app on :8080
 ```
 

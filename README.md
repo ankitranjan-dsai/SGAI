@@ -4,6 +4,14 @@
 
 **Kaggle AI Agents: Intensive Vibe Coding Capstone — Track: Freestyle**
 
+[![CI](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml)
+
+| | |
+|---|---|
+| **Live demo** | _coming soon_ — local demo available now: run `./run.sh` |
+| **Demo video** | _coming soon_ |
+| **Kaggle writeup** | _coming soon_ |
+
 ---
 
 ## Problem
@@ -21,8 +29,9 @@ GitHub URL. They audit dependency manifests across **PyPI, npm, Go, and
 crates.io** against the live [OSV.dev](https://osv.dev) database, run **Bandit**
 static analysis on Python (and optional **Semgrep** multi-language analysis with
 `--deep`), de-duplicate and risk-rank the findings, write a remediation-ready
-report, and can open a fix PR. Because it stores every scan, it also tells you
-exactly **what's new, what's fixed, and what's still open** since the last run.
+report, and can preview dependency fixes — and optionally open a remediation PR
+for a repo you own. Because it stores every scan, it also tells you exactly
+**what's new, what's fixed, and what's still open** since the last run.
 
 It runs three ways from one codebase: a **CLI**, a **mobile-friendly web app**,
 and a reusable **MCP server** any agent can call.
@@ -112,8 +121,8 @@ dependency CVEs, unsafe Python for Bandit, and an insecure `server.js` for
 Semgrep. **No API key required.**
 
 ```bash
-uv run sgai scan ./examples/kaggle_demo_repo            # 23 findings (deps + Bandit)
-uv run sgai scan ./examples/kaggle_demo_repo --deep     # 32 findings (+ Semgrep)
+uv run sgai scan ./examples/kaggle_demo_repo            # rich report — typically ~20+ findings (deps + Bandit)
+uv run sgai scan ./examples/kaggle_demo_repo --deep     # Semgrep adds more findings when available
 uv run sgai scan ./examples/kaggle_demo_repo --sarif out.sarif
 uv run sgai history ./examples/kaggle_demo_repo         # the scan timeline
 ```

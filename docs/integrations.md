@@ -42,8 +42,13 @@ standard MCP config:
 Once connected, the agent has SGAI's CVE lookups and static-analysis tools
 available natively — no extra glue code.
 
-## Run SGAI in CI (GitHub Actions)
+## Continuous integration (GitHub Actions)
 
-The workflow in [`.github/workflows/sgai-security.yml`](../.github/workflows/sgai-security.yml)
-audits every pull request and uploads SARIF to the repository's Security tab, so
-SGAI becomes part of your DevSecOps pipeline.
+Two workflows ship with the repo:
+
+- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and
+  pull request: it installs dependencies with `uv` on Python 3.11, runs the test
+  suite (`uv run pytest -q`), and lints with `ruff`.
+- [`.github/workflows/sgai-security.yml`](../.github/workflows/sgai-security.yml)
+  audits every pull request with SGAI itself and uploads SARIF to the
+  repository's Security tab — so SGAI becomes part of your DevSecOps pipeline.
