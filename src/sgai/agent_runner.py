@@ -22,6 +22,7 @@ from sgai.memory import ScanDiff, ScanMemory, SgaiMemoryService
 from sgai.models import Finding
 from sgai.report import _changes_section
 from sgai.runner import gather_findings, target_key
+from sgai.threats import detect_exploit_chains, render_threat_section
 
 _APP = "sgai"
 _USER = "user"
@@ -121,6 +122,19 @@ async def narrate_findings(
     """
     payload = json.dumps([_finding_to_dict(f) for f in findings], indent=2)
 
+    # Correlate findings into exploit chains deterministically and hand the summary
+    # to the triage agent so its threat-model narration is grounded, not invented.
+    chains = detect_exploit_chains(findings)
+    chain_context = ""
+    if chains:
+        chain_lines = [
+            f"- {c.name} ({c.severity.label}): "
+            + " → ".join(f.location for f in c.findings)
+            + f" ⇒ {c.impact}"
+            for c in chains
+        ]
+        chain_context = "Pre-computed exploit chains:\n" + "\n".join(chain_lines) + "\n\n"
+
     pipeline = build_narration_pipeline()
     runner = InMemoryRunner(agent=pipeline, app_name=_APP)
     session_id = _session_id(target)
@@ -129,7 +143,7 @@ async def narrate_findings(
     )
 
     preamble = f"{memory_context}\n\n" if memory_context else ""
-    prompt = f"{preamble}Target: {target}\nFindings (JSON):\n{payload}"
+    prompt = f"{preamble}{chain_context}Target: {target}\nFindings (JSON):\n{payload}"
     message = types.Content(role="user", parts=[types.Part(text=prompt)])
 
     report = ""
@@ -138,6 +152,12 @@ async def narrate_findings(
     ):
         if event.is_final_response() and event.content and event.content.parts:
             report = event.content.parts[0].text or report
+
+    # Guarantee the Mermaid exploit-chain graphs are present even if the LLM
+    # narrated the chains only in prose — the deterministic section renders the
+    # graphs the report UI expects.
+    if chains and "```mermaid" not in report:
+        report = report.rstrip() + "\n\n" + "\n".join(render_threat_section(chains))
 
     # Persist this session into the ADK memory service so future scans can
     # recall it via the `load_memory` tool. Best-effort: never fail a report.
@@ -151,6 +171,50 @@ async def narrate_findings(
         pass
 
     return report
+
+
+def llm_available() -> bool:
+    """True when a Gemini API key is configured, so LLM calls won't hang offline."""
+    import os
+
+    return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+
+
+async def refine_patch_chat(
+    code: str, message: str, history: list[dict], patch_summary: str
+) -> str:
+    """One turn of the interactive remediation chat; returns the assistant reply.
+
+    Raises if no model is configured or the model errors — the caller is expected
+    to fall back to a deterministic responder so the chat always answers.
+    """
+    from sgai.agents.specialists import build_remediation_chat_agent
+
+    if not llm_available():
+        raise RuntimeError("no model configured")
+
+    runner = InMemoryRunner(agent=build_remediation_chat_agent(), app_name=_APP)
+    session_id = "chat-" + hashlib.sha1((code + str(len(history))).encode()).hexdigest()[:12]
+    await runner.session_service.create_session(
+        app_name=_APP, user_id=_USER, session_id=session_id
+    )
+
+    transcript = "\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in history)
+    prompt = (
+        f"Code under review:\n```python\n{code}\n```\n\n"
+        f"SGAI's proposed patches:\n{patch_summary}\n\n"
+        + (f"Conversation so far:\n{transcript}\n\n" if transcript else "")
+        + f"Developer: {message}"
+    )
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
+
+    reply = ""
+    async for event in runner.run_async(
+        user_id=_USER, session_id=session_id, new_message=content
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            reply = event.content.parts[0].text or reply
+    return reply
 
 
 async def run_agent_scan(repo: str) -> str:

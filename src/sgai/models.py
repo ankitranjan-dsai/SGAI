@@ -40,3 +40,6 @@ class Finding:
     confidence: str = ""  # static-analysis confidence, when available
     references: list[str] = field(default_factory=list)
     risk_score: int = 0
+    # Dependency reachability: True when first-party code imports the vulnerable
+    # package, False when it provably doesn't, None when not analyzed.
+    reachable: bool | None = None

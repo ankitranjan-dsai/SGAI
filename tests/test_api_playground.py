@@ -1,0 +1,79 @@
+"""Tests for the Code Playground /heal and SSE /chat endpoints (offline).
+
+These exercise the deterministic paths only — no Gemini key is configured in
+tests, so the chat endpoint falls back to SGAI's local patch engine.
+"""
+
+import json
+
+from fastapi.testclient import TestClient
+
+from sgai.api import app
+
+client = TestClient(app)
+
+VULN = "import yaml\ndata = yaml.load(raw)\neval(expr)\n"
+
+
+def test_heal_returns_patches_and_diff():
+    resp = client.post("/heal", json={"code": VULN})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["original"] == VULN
+    assert "yaml.safe_load(raw)" in body["patched"]
+    assert "ast.literal_eval(expr)" in body["patched"]
+    assert body["diff"]  # a unified diff was produced
+    rules = {p["rule"] for p in body["patches"]}
+    assert {"B506", "B307"} <= rules
+
+
+def test_heal_clean_code_no_patches():
+    resp = client.post("/heal", json={"code": "x = 1\ny = x + 2\n"})
+    body = resp.json()
+    assert body["patches"] == []
+    assert body["patched"] == "x = 1\ny = x + 2\n"
+
+
+def test_chat_streams_sse_fallback():
+    resp = client.post(
+        "/chat", json={"code": VULN, "message": "what would you change?", "history": []}
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    frames = [f for f in resp.text.split("\n\n") if f.strip()]
+    events = [json.loads(f[len("data: "):]) for f in frames if f.startswith("data: ")]
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "start"
+    assert kinds[-1] == "done"
+    assert any(e["event"] == "token" for e in events)
+
+    reply = "".join(e.get("text", "") for e in events if e["event"] == "token")
+    assert "safe_load" in reply or "yaml" in reply.lower()
+
+
+def test_chat_apply_intent_returns_patched_code():
+    resp = client.post(
+        "/chat", json={"code": VULN, "message": "apply the fix", "history": []}
+    )
+    frames = [f for f in resp.text.split("\n\n") if f.startswith("data: ")]
+    done = json.loads(frames[-1][len("data: "):])
+    assert done["event"] == "done"
+    assert done["applied_patch"] is True
+    assert "yaml.safe_load" in done["patched"]
+
+
+def test_chat_no_patchable_code():
+    resp = client.post(
+        "/chat", json={"code": "x = 1\n", "message": "apply", "history": []}
+    )
+    frames = [f for f in resp.text.split("\n\n") if f.startswith("data: ")]
+    done = json.loads(frames[-1][len("data: "):])
+    assert done["applied_patch"] is False
+
+
+def test_index_serves_three_tabs():
+    resp = client.get("/")
+    assert resp.status_code == 200
+    for tab in ("Scan Results", "Code Playground", "Interactive Agent Chat"):
+        assert tab in resp.text

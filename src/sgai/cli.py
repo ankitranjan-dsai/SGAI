@@ -236,6 +236,54 @@ def _fix(path: str, open_pr: bool, branch: str) -> int:
     return 0
 
 
+def _heal(path: str, dry_run: bool, no_validate: bool, deep: bool) -> int:
+    """Self-heal a local repo: apply AST-safe patches validated by its own tests."""
+    from sgai.fix import heal, plan_code_patches
+    from sgai.runner import gather_findings
+
+    target = Path(path).resolve()
+    if not target.is_dir():
+        console.print(f"[red]error:[/red] {path!r} is not a directory")
+        return 1
+
+    console.print(f"[bold]SGAI[/bold] healing [cyan]{target}[/cyan] …")
+    findings = asyncio.run(gather_findings(str(target), deep=deep))
+    plan = plan_code_patches(str(target), findings)
+    if not plan.patches:
+        console.print("[green]✓ Nothing to heal — no patchable unsafe patterns found.[/green]")
+        return 0
+
+    table = Table(title=f"{len(plan.patches)} planned patch(es)")
+    table.add_column("Rule")
+    table.add_column("Location")
+    table.add_column("Refactoring")
+    for p in plan.patches:
+        table.add_row(p.rule, f"{p.file}:{p.line}", p.description)
+    console.print(table)
+    for file in plan.new_contents:
+        console.print(plan.diff(file), highlight=False)
+
+    if dry_run:
+        console.print("[dim]Dry run — re-run without --dry-run to apply.[/dim]")
+        return 0
+
+    result = asyncio.run(
+        heal(str(target), findings=findings, deep=deep, validate=not no_validate)
+    )
+    if result.tests_passed:
+        console.print(f"[green]✓ {len(result.applied)} patch(es) applied — tests pass.[/green]")
+    elif result.applied:
+        console.print(
+            f"[yellow]{len(result.applied)} patch(es) applied[/yellow] "
+            f"[dim]({result.detail})[/dim]"
+        )
+    else:
+        console.print(f"[red]No patches kept:[/red] {result.detail}")
+    for p in result.rejected:
+        console.print(f"[red]  rolled back:[/red] {p.rule} at {p.file}:{p.line} (broke the tests)")
+    return 0 if (result.applied or not result.rejected) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sgai", description="Multi-agent security review.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -281,6 +329,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     fix.add_argument("--branch", default="sgai/dependency-fixes", help="Branch name for the PR.")
 
+    heal = sub.add_parser(
+        "heal", help="Self-heal unsafe code patterns with AST-safe, test-validated patches."
+    )
+    heal.add_argument("path", help="Local repository to heal.")
+    heal.add_argument("--dry-run", action="store_true", help="Preview patches without applying.")
+    heal.add_argument(
+        "--no-validate", action="store_true", help="Skip running the project's tests."
+    )
+    heal.add_argument(
+        "--deep", action="store_true", help="Also heal findings from Semgrep (multi-language scan)."
+    )
+
     args = parser.parse_args(argv)
     if args.command == "scan":
         return _scan(
@@ -292,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
         return _accept(args.path, args.finding, args.reason)
     if args.command == "fix":
         return _fix(args.path, args.open_pr, args.branch)
+    if args.command == "heal":
+        return _heal(args.path, args.dry_run, args.no_validate, args.deep)
     parser.print_help()
     return 1
 

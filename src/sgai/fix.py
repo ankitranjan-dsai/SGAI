@@ -1,16 +1,28 @@
-"""Automated remediation: resolve patched versions and rewrite manifests.
+"""Automated remediation: dependency upgrades and self-healing code patches.
 
-For each vulnerable PyPI dependency, SGAI asks OSV.dev which versions fixed the
-advisories and upgrades the pin to a version that is safe against *all* of them.
-The resulting changes can be previewed (dry run) or opened as a pull request.
+Two remediation layers live here:
 
-Lockfile ecosystems (npm/Go/Rust) are reported but not auto-rewritten yet —
-requirements.txt pins are the clean, unambiguous case.
+1. **Dependency fixes** — for each vulnerable PyPI dependency, SGAI asks OSV.dev
+   which versions fixed the advisories and upgrades the pin to a version that is
+   safe against *all* of them. Lockfile ecosystems (npm/Go/Rust) are reported
+   but not auto-rewritten yet.
+
+2. **Code patches (self-healing)** — Bandit/Semgrep findings are mapped to
+   AST-safe, line-targeted refactorings (``yaml.load`` → ``yaml.safe_load``,
+   ``eval`` → ``ast.literal_eval``, ``shell=True`` → ``shlex.split``, …). Every
+   patch is validated: the flagged line must actually contain the unsafe
+   pattern, and the patched file must still parse. The :func:`heal` loop then
+   runs the project's own tests via the sandboxed ``validate_patch`` MCP tool
+   and rolls back any patch that breaks them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import ast
+import difflib
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -18,6 +30,7 @@ from packaging.version import InvalidVersion, Version
 
 from sgai.config import HTTP_TIMEOUT, OSV_QUERY_URL
 from sgai.manifests import parse_manifest
+from sgai.models import Finding
 
 # Directories that never hold first-party manifests.
 _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
@@ -123,3 +136,399 @@ def build_pr_body(fixes: list[Fix]) -> str:
         lines.append(f"| `{fx.package}` | {fx.old_version} | {fx.new_version} |")
     lines += ["", "_Patched versions resolved from OSV.dev advisories by SGAI._"]
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Self-healing code patches
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class PatchRule:
+    """One unsafe-pattern → safe-pattern refactoring.
+
+    ``rewrite`` transforms a single source line and returns ``None`` when the
+    pattern is not present (the finding pointed somewhere this rule can't fix).
+    ``needs_import`` names a stdlib module the patched line relies on; it is
+    inserted once per file if not already imported.
+    """
+
+    rule_id: str
+    description: str
+    rewrite: Callable[[str], str | None]
+    needs_import: str | None = None
+
+
+def _rewrite_yaml_load(line: str) -> str | None:
+    """``yaml.load(x[, Loader=…])`` → ``yaml.safe_load(x)``."""
+    with_loader = re.sub(
+        r"yaml\.load\(\s*([^,()]+?)\s*,\s*Loader\s*=\s*[^)]+\)", r"yaml.safe_load(\1)", line
+    )
+    if with_loader != line:
+        return with_loader
+    plain = line.replace("yaml.load(", "yaml.safe_load(")
+    return plain if plain != line else None
+
+
+def _rewrite_eval(line: str) -> str | None:
+    """Bare ``eval(x)`` → ``ast.literal_eval(x)`` (method calls are left alone)."""
+    new = re.sub(r"(?<![\w.])eval\(", "ast.literal_eval(", line)
+    return new if new != line else None
+
+
+_SHELL_TRUE = re.compile(
+    r"(?P<head>subprocess\.(?:call|run|Popen|check_call|check_output)\()"
+    r"(?P<arg>[^,]+?),\s*shell\s*=\s*True"
+)
+
+
+def _rewrite_shell_true(line: str) -> str | None:
+    """``subprocess.call(cmd, shell=True)`` → ``subprocess.call(shlex.split(cmd))``."""
+    new = _SHELL_TRUE.sub(lambda m: f"{m.group('head')}shlex.split({m.group('arg').strip()})", line)
+    return new if new != line else None
+
+
+def _rewrite_weak_hash(line: str) -> str | None:
+    """``hashlib.md5(`` / ``hashlib.sha1(`` → ``hashlib.sha256(``."""
+    new = re.sub(r"hashlib\.(md5|sha1)\(", "hashlib.sha256(", line)
+    return new if new != line else None
+
+
+_HARDCODED_ASSIGN = re.compile(
+    r"^(?P<indent>\s*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<q>['\"]).*(?P=q)\s*(?P<comment>#.*)?$"
+)
+
+
+def _rewrite_hardcoded_secret(line: str) -> str | None:
+    """``TOKEN = "literal"`` → ``TOKEN = os.environ.get("TOKEN", "")``."""
+    m = _HARDCODED_ASSIGN.match(line.rstrip("\n"))
+    if not m:
+        return None
+    indent, name = m.group("indent"), m.group("name")
+    comment = f"  {m.group('comment')}" if m.group("comment") else ""
+    newline = "\n" if line.endswith("\n") else ""
+    return f'{indent}{name} = os.environ.get("{name}", ""){comment}{newline}'
+
+
+def _rewrite_verify_false(line: str) -> str | None:
+    """``verify=False`` on requests calls → ``verify=True``."""
+    new = re.sub(r"verify\s*=\s*False", "verify=True", line)
+    return new if new != line else None
+
+
+# Registry keyed by Bandit test id, with alias substrings so equivalent Semgrep
+# check ids (e.g. "avoid-eval", "yaml-load") map onto the same refactoring.
+_PATCH_RULES: dict[str, PatchRule] = {
+    "B506": PatchRule("B506", "Use yaml.safe_load() instead of yaml.load()", _rewrite_yaml_load),
+    "B307": PatchRule(
+        "B307", "Replace eval() with ast.literal_eval()", _rewrite_eval, needs_import="ast"
+    ),
+    "B602": PatchRule(
+        "B602",
+        "Drop shell=True; tokenize the command with shlex.split()",
+        _rewrite_shell_true,
+        needs_import="shlex",
+    ),
+    "B604": PatchRule(
+        "B604",
+        "Drop shell=True; tokenize the command with shlex.split()",
+        _rewrite_shell_true,
+        needs_import="shlex",
+    ),
+    "B303": PatchRule("B303", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash),
+    "B324": PatchRule("B324", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash),
+    "B105": PatchRule(
+        "B105",
+        "Move the hardcoded secret to an environment variable",
+        _rewrite_hardcoded_secret,
+        needs_import="os",
+    ),
+    "B501": PatchRule("B501", "Re-enable TLS certificate verification", _rewrite_verify_false),
+}
+
+# Semgrep check ids vary by ruleset; match them onto Bandit-equivalent rules by
+# substring so the healer covers both scanners.
+_RULE_ALIASES = [
+    ("yaml", "B506"),
+    ("eval", "B307"),
+    ("shell", "B602"),
+    ("md5", "B324"),
+    ("sha1", "B324"),
+    ("hardcoded", "B105"),
+    ("verify", "B501"),
+]
+
+
+def _match_rule(finding_id: str) -> PatchRule | None:
+    """Find the patch rule for a Bandit test id or a Semgrep check id."""
+    rule = _PATCH_RULES.get(finding_id)
+    if rule:
+        return rule
+    lowered = finding_id.lower()
+    for needle, rule_id in _RULE_ALIASES:
+        if needle in lowered:
+            return _PATCH_RULES[rule_id]
+    return None
+
+
+@dataclass
+class CodePatch:
+    """One applied (or planned) line-level security refactoring."""
+
+    file: str  # path relative to the repo root
+    line: int  # 1-based line number of the finding
+    rule: str
+    description: str
+    original_line: str
+    patched_line: str
+
+
+@dataclass
+class PatchPlan:
+    """A set of validated patches plus the resulting file contents."""
+
+    patches: list[CodePatch] = field(default_factory=list)
+    originals: dict[str, str] = field(default_factory=dict)  # file → pre-patch content
+    new_contents: dict[str, str] = field(default_factory=dict)  # file → post-patch content
+
+    def diff(self, file: str) -> str:
+        """Unified diff for one patched file."""
+        return "".join(
+            difflib.unified_diff(
+                self.originals[file].splitlines(keepends=True),
+                self.new_contents[file].splitlines(keepends=True),
+                fromfile=f"a/{file}",
+                tofile=f"b/{file}",
+            )
+        )
+
+
+def _module_imported(tree: ast.Module, module: str) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(a.name.split(".")[0] == module for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == module:
+            return True
+    return False
+
+
+def _insert_import(lines: list[str], module: str) -> list[str]:
+    """Insert ``import <module>`` after the last top-level import (or the top)."""
+    tree = ast.parse("".join(lines))
+    last_import_line = 0
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            last_import_line = node.end_lineno or node.lineno
+        else:
+            break
+    if last_import_line == 0 and tree.body and isinstance(tree.body[0], ast.Expr):
+        first = tree.body[0]
+        if isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+            last_import_line = first.end_lineno or first.lineno  # after the module docstring
+    out = list(lines)
+    out.insert(last_import_line, f"import {module}\n")
+    return out
+
+
+def _targets_from_findings(findings: list[Finding]) -> list[tuple[str, int, str]]:
+    """Extract deduplicated ``(file, line, rule_id)`` patch targets from findings."""
+    targets: list[tuple[str, int, str]] = []
+    seen: set[tuple[str, int]] = set()
+    for f in findings:
+        if f.source not in ("static", "semgrep"):
+            continue
+        rule = _match_rule(f.id)
+        if rule is None:
+            continue
+        file, _, line = f.location.rpartition(":")
+        if not file or not line.isdigit():
+            continue
+        key = (file, int(line))
+        if key in seen:
+            continue  # Bandit and Semgrep often flag the same line
+        seen.add(key)
+        targets.append((file, int(line), rule.rule_id))
+    return targets
+
+
+def build_patch_plan(repo_dir: str, targets: list[tuple[str, int, str]]) -> PatchPlan:
+    """Turn ``(file, line, rule_id)`` targets into a validated :class:`PatchPlan`.
+
+    Each candidate patch must survive two AST checks before it is accepted:
+    the file parses before the rewrite, and it still parses after. Patches
+    that would break the file are silently skipped — healing must never make
+    the code worse.
+    """
+    root = Path(repo_dir).resolve()
+    plan = PatchPlan()
+
+    by_file: dict[str, list[tuple[int, str]]] = {}
+    for file, line, rule_id in targets:
+        by_file.setdefault(file, []).append((line, rule_id))
+
+    for file, file_targets in sorted(by_file.items()):
+        path = root / file
+        if not path.is_file():
+            continue
+        source = path.read_text()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue  # never patch a file we can't parse
+
+        lines = source.splitlines(keepends=True)
+        needed_imports: set[str] = set()
+        file_patches: list[CodePatch] = []
+
+        for line_no, rule_id in sorted(file_targets):
+            rule = _PATCH_RULES[rule_id]
+            if not 1 <= line_no <= len(lines):
+                continue
+            original_line = lines[line_no - 1]
+            patched_line = rule.rewrite(original_line)
+            if patched_line is None or patched_line == original_line:
+                continue
+            candidate = list(lines)
+            candidate[line_no - 1] = patched_line
+            try:
+                ast.parse("".join(candidate))
+            except SyntaxError:
+                continue  # the rewrite would break the file — reject it
+            lines = candidate
+            if rule.needs_import and not _module_imported(tree, rule.needs_import):
+                needed_imports.add(rule.needs_import)
+            file_patches.append(
+                CodePatch(
+                    file=file,
+                    line=line_no,
+                    rule=rule.rule_id,
+                    description=rule.description,
+                    original_line=original_line.rstrip("\n"),
+                    patched_line=patched_line.rstrip("\n"),
+                )
+            )
+
+        if not file_patches:
+            continue
+        for module in sorted(needed_imports):
+            lines = _insert_import(lines, module)
+        new_source = "".join(lines)
+        try:
+            ast.parse(new_source)
+        except SyntaxError:
+            continue  # import insertion should never break a file, but verify anyway
+        plan.patches.extend(file_patches)
+        plan.originals[file] = source
+        plan.new_contents[file] = new_source
+
+    return plan
+
+
+def plan_code_patches(repo_dir: str, findings: list[Finding]) -> PatchPlan:
+    """Map Bandit/Semgrep findings to a validated set of code patches."""
+    return build_patch_plan(repo_dir, _targets_from_findings(findings))
+
+
+def apply_patch_plan(repo_dir: str, plan: PatchPlan) -> None:
+    """Write the patched file contents to disk."""
+    root = Path(repo_dir).resolve()
+    for file, content in plan.new_contents.items():
+        (root / file).write_text(content)
+
+
+def rollback_patch_plan(repo_dir: str, plan: PatchPlan) -> None:
+    """Restore every patched file to its pre-patch content."""
+    root = Path(repo_dir).resolve()
+    for file, content in plan.originals.items():
+        (root / file).write_text(content)
+
+
+@dataclass
+class HealResult:
+    """Outcome of a self-healing run."""
+
+    applied: list[CodePatch] = field(default_factory=list)
+    rejected: list[CodePatch] = field(default_factory=list)  # rolled back: broke the tests
+    plan: PatchPlan | None = None
+    tests_ran: bool = False
+    tests_passed: bool | None = None
+    detail: str = ""
+
+
+async def heal(
+    repo_dir: str,
+    findings: list[Finding] | None = None,
+    deep: bool = False,
+    validate: bool = True,
+) -> HealResult:
+    """Self-heal ``repo_dir``: patch unsafe patterns, keep only test-passing patches.
+
+    The loop: gather findings (unless provided), plan AST-safe patches, apply
+    them, then run the project's test suite through the sandboxed
+    ``validate_patch`` tool. If the tests fail, patches are rolled back one at a
+    time — most recent first — re-running the tests after each rollback until
+    they pass again. Patches that had to be reverted are reported in
+    ``rejected`` so the developer can fix those spots manually.
+    """
+    from sgai.mcp_server import server
+
+    if findings is None:
+        from sgai.runner import gather_findings
+
+        findings = await gather_findings(repo_dir, deep=deep)
+
+    targets = _targets_from_findings(findings)
+    plan = build_patch_plan(repo_dir, targets)
+    if not plan.patches:
+        return HealResult(detail="no patchable findings")
+
+    if not validate:
+        apply_patch_plan(repo_dir, plan)
+        return HealResult(applied=plan.patches, plan=plan, detail="validation skipped")
+
+    # Baseline: if the suite already fails before we touch anything, we can't
+    # attribute failures to our patches — apply but report validation as moot.
+    baseline = server.validate_patch(repo_dir)
+    if not baseline.get("ran"):
+        apply_patch_plan(repo_dir, plan)
+        return HealResult(
+            applied=plan.patches, plan=plan,
+            detail=f"no test suite to validate against ({baseline.get('reason', 'unknown')})",
+        )
+    if not baseline.get("passed"):
+        apply_patch_plan(repo_dir, plan)
+        return HealResult(
+            applied=plan.patches, plan=plan, tests_ran=True,
+            detail="tests were already failing before healing; validation inconclusive",
+        )
+
+    apply_patch_plan(repo_dir, plan)
+    result = server.validate_patch(repo_dir)
+    if result.get("passed"):
+        return HealResult(applied=plan.patches, plan=plan, tests_ran=True, tests_passed=True)
+
+    # Rollback loop: retract patches from the end until the suite is green.
+    active = list(targets)
+    all_patches = {(p.file, p.line): p for p in plan.patches}
+    rejected: list[CodePatch] = []
+    rollback_patch_plan(repo_dir, plan)
+    while active:
+        dropped = active.pop()
+        if (dropped[0], dropped[1]) in all_patches:
+            rejected.insert(0, all_patches[(dropped[0], dropped[1])])
+        subplan = build_patch_plan(repo_dir, active)
+        if not subplan.patches:
+            continue
+        apply_patch_plan(repo_dir, subplan)
+        result = server.validate_patch(repo_dir)
+        if result.get("passed"):
+            return HealResult(
+                applied=subplan.patches, rejected=rejected, plan=subplan,
+                tests_ran=True, tests_passed=True,
+                detail=f"rolled back {len(rejected)} patch(es) that broke the tests",
+            )
+        rollback_patch_plan(repo_dir, subplan)
+
+    return HealResult(
+        rejected=list(plan.patches), tests_ran=True, tests_passed=False,
+        detail="every patch combination broke the tests; all patches rolled back",
+    )

@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from sgai.mcp_server import server
 from sgai.report import build_markdown_report
-from sgai.risk import assess
+from sgai.risk import apply_reachability, assess, build_import_graph
 
 app = FastAPI(title="SGAI", description="Multi-agent security review service.", version="0.1.0")
 
@@ -112,6 +112,7 @@ async def scan(req: ScanRequest) -> ScanResponse:
                 static_result = server.run_static_analysis("submitted.py", str(root))
 
             findings = assess(dep_result, static_result)
+            findings = apply_reachability(findings, build_import_graph(str(root)))
             report = build_markdown_report(label, findings)
 
     # Optionally let the multi-agent layer narrate the report. If no key is
@@ -208,6 +209,7 @@ async def _scan_events(req: ScanRequest):
                         "detail": f"{static_result.get('count', 0)} issues"})
 
             findings = assess(dep_result, static_result)
+            findings = apply_reachability(findings, build_import_graph(str(root)))
             report = build_markdown_report(label, findings)
 
     # Optional multi-agent narration, streaming one event per agent.
@@ -243,3 +245,170 @@ async def _scan_events(req: ScanRequest):
 async def scan_stream(req: ScanRequest) -> StreamingResponse:
     """Stream scan progress as newline-delimited JSON so the UI shows live work."""
     return StreamingResponse(_scan_events(req), media_type="application/x-ndjson")
+
+
+# --------------------------------------------------------------------------- #
+# Code Playground: self-healing patch preview
+# --------------------------------------------------------------------------- #
+class HealRequest(BaseModel):
+    code: str = ""  # a Python source file to patch
+    deep: bool = False  # also consider Semgrep findings
+
+
+class PatchOut(BaseModel):
+    line: int
+    rule: str
+    description: str
+    original_line: str
+    patched_line: str
+
+
+class HealResponse(BaseModel):
+    original: str
+    patched: str
+    diff: str
+    patches: list[PatchOut]
+
+
+def _plan_submitted_code(code: str, deep: bool):
+    """Run static analysis over a submitted snippet and plan AST-safe patches."""
+    from sgai.fix import plan_code_patches
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "submitted.py").write_text(code)
+        static_result = server.run_static_analysis("submitted.py", str(root))
+        semgrep_result = server.run_semgrep("submitted.py", str(root)) if deep else None
+        findings = assess({"vulnerable": []}, static_result, semgrep_result)
+        plan = plan_code_patches(str(root), findings)
+        patched = plan.new_contents.get("submitted.py", code)
+        diff = plan.diff("submitted.py") if "submitted.py" in plan.new_contents else ""
+        return findings, plan, patched, diff
+
+
+@app.post("/heal", response_model=HealResponse)
+def heal(req: HealRequest) -> HealResponse:
+    """Preview the self-healing patches for a submitted Python snippet.
+
+    Runs Bandit (and optionally Semgrep) over the code, maps findings to
+    AST-safe refactorings, and returns the before/after text plus a unified
+    diff for the side-by-side playground viewer. Nothing is executed; the
+    snippet is written to a throwaway temp dir and discarded.
+    """
+    _findings, plan, patched, diff = _plan_submitted_code(req.code, req.deep)
+    return HealResponse(
+        original=req.code,
+        patched=patched,
+        diff=diff,
+        patches=[
+            PatchOut(
+                line=p.line,
+                rule=p.rule,
+                description=p.description,
+                original_line=p.original_line,
+                patched_line=p.patched_line,
+            )
+            for p in plan.patches
+        ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Interactive Agent Chat (SSE): refine remediation patches conversationally
+# --------------------------------------------------------------------------- #
+class ChatRequest(BaseModel):
+    code: str = ""
+    message: str = ""
+    history: list[dict] = []  # [{role, content}, …]
+    deep: bool = False
+
+
+_APPLY_INTENT = ("apply", "fix it", "go ahead", "do it", "patch it", "yes", "accept")
+
+
+def _patch_summary(plan) -> str:
+    if not plan.patches:
+        return "No automatic patch applies to this code."
+    return "\n".join(
+        f"- line {p.line}: {p.description} (`{p.original_line.strip()}` → `{p.patched_line.strip()}`)"
+        for p in plan.patches
+    )
+
+
+def _fallback_reply(message: str, plan, patched: str) -> tuple[str, bool]:
+    """Deterministic remediation reply used when no LLM is configured.
+
+    Returns ``(reply_text, includes_patch)`` — the second flag tells the UI to
+    refresh the diff viewer with the patched code.
+    """
+    lowered = message.lower().strip()
+    if not plan.patches:
+        return (
+            "I don't see an unsafe pattern I can auto-patch here. If you paste code "
+            "with an eval(), yaml.load(), subprocess(shell=True), a weak hash, or a "
+            "hardcoded secret, I'll propose a safe rewrite.",
+            False,
+        )
+    if any(kw in lowered for kw in _APPLY_INTENT):
+        return (
+            "Done — I applied these AST-safe patches and the diff viewer now shows the "
+            "result:\n" + _patch_summary(plan) + "\n\nEach rewrite preserves behavior; "
+            "run your tests (or `sgai heal`) to confirm.",
+            True,
+        )
+    return (
+        "Here's what I'd change to make this safe:\n"
+        + _patch_summary(plan)
+        + "\n\nSay “apply” and I'll patch it, or ask me to explain any one of these.",
+        False,
+    )
+
+
+async def _chat_events(req: ChatRequest):
+    """Server-Sent-Events stream for the interactive remediation chat.
+
+    Frames follow the SSE wire format (``data: <json>\\n\\n``). The model reply
+    is streamed word-by-word so the UI types it out live; when a patch results,
+    a final ``done`` frame carries the updated code and diff for the playground.
+    """
+
+    def sse(obj: dict) -> str:
+        return f"data: {json.dumps(obj)}\n\n"
+
+    _findings, plan, patched, diff = _plan_submitted_code(req.code, req.deep)
+    summary = _patch_summary(plan)
+
+    yield sse({"event": "start"})
+
+    reply = ""
+    includes_patch = False
+    from sgai.agent_runner import refine_patch_chat
+
+    try:
+        reply = await refine_patch_chat(req.code, req.message, req.history, summary)
+        includes_patch = "```" in reply  # the agent returned a code block
+    except Exception:  # noqa: BLE001 — always answer, even with no model
+        reply, includes_patch = _fallback_reply(req.message, plan, patched)
+
+    # Stream the reply word-by-word for a live-typing feel.
+    words = reply.split(" ")
+    for i, word in enumerate(words):
+        yield sse({"event": "token", "text": word + (" " if i < len(words) - 1 else "")})
+
+    yield sse({
+        "event": "done",
+        "reply": reply,
+        "applied_patch": includes_patch,
+        "patched": patched if includes_patch else None,
+        "diff": diff if includes_patch else None,
+    })
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """Chat with the remediation agent over SSE to refine patches dynamically."""
+    return StreamingResponse(
+        _chat_events(req),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

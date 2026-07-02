@@ -13,6 +13,7 @@ from google.adk.agents import LlmAgent
 
 from sgai.agents.security_tools import (
     DEPENDENCY_TOOLS,
+    HEALER_TOOLS,
     SCANNER_TOOLS,
     STATIC_ANALYSIS_TOOLS,
     build_security_toolset,
@@ -95,6 +96,57 @@ def build_remediation_agent() -> LlmAgent:
             "You fix problems. For each prioritized finding, propose a concrete "
             "remediation: a safe version to upgrade a dependency to, or a code change "
             "to remove an unsafe pattern. Be specific and minimal."
+        ),
+    )
+
+
+def build_code_healer_agent() -> LlmAgent:
+    """Self-healing agent: patch unsafe code, prove it non-breaking, or roll back."""
+    return LlmAgent(
+        name="code_healer_agent",
+        model=MODEL,
+        description="Applies AST-safe security patches and validates them with the project's tests.",
+        instruction=(
+            "You are a self-healing code surgeon. The repository's absolute root path "
+            "is stated in the conversation; use it as `root` for every tool call and "
+            "never touch anything outside it.\n"
+            "Workflow:\n"
+            "1. Call `run_static_analysis` to enumerate unsafe patterns, then "
+            "`read_source_file` on each flagged file to understand the context.\n"
+            "2. For each finding, propose the minimal, behavior-preserving refactoring "
+            "(yaml.safe_load over yaml.load, ast.literal_eval over eval, shlex.split "
+            "over shell=True, sha256 over md5, environment variables over hardcoded "
+            "secrets). Never rewrite more than the offending lines.\n"
+            "3. Call `validate_patch` BEFORE patching to record the baseline, and "
+            "AFTER every patch to prove it non-breaking.\n"
+            "4. If the tests fail after a patch, that patch is wrong: roll it back "
+            "(restore the original lines) or correct it, then validate again. Loop "
+            "until the suite is green. Never leave the repo with failing tests that "
+            "were passing before you started.\n"
+            "Report every patch you kept, every patch you rolled back, and why. "
+            "Use ONLY the tools provided to you."
+        ),
+        tools=[build_security_toolset(HEALER_TOOLS)],
+    )
+
+
+def build_remediation_chat_agent() -> LlmAgent:
+    """Conversational remediation agent for the interactive patch-refinement chat."""
+    return LlmAgent(
+        name="remediation_chat_agent",
+        model=MODEL,
+        description="Chats with a developer to refine security patches interactively.",
+        instruction=(
+            "You are SGAI's interactive remediation assistant. A developer is looking at "
+            "a piece of code, the unsafe patterns SGAI found in it, and the patches SGAI "
+            "proposes. Answer their questions and refine the fix on request.\n"
+            "Ground rules:\n"
+            "- Keep the behavior of the code identical; only remove the vulnerability.\n"
+            "- Prefer the minimal change (yaml.safe_load, ast.literal_eval, shlex.split, "
+            "sha256, environment variables for secrets).\n"
+            "- When you propose changed code, return it in a single fenced code block so "
+            "the playground can show a diff.\n"
+            "- Be concise and concrete; explain the security reasoning in one or two lines."
         ),
     )
 

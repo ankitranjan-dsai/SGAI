@@ -33,6 +33,25 @@ report, and can preview dependency fixes — and optionally open a remediation P
 for a repo you own. Because it stores every scan, it also tells you exactly
 **what's new, what's fixed, and what's still open** since the last run.
 
+Five capabilities take it past a scanner:
+
+- **Self-healing patches** (`sgai heal`) — maps Bandit/Semgrep findings to
+  AST-safe refactorings (`yaml.load`→`yaml.safe_load`, `eval`→`ast.literal_eval`,
+  `shell=True`→`shlex.split`, weak hashes→`sha256`, hardcoded secrets→env vars),
+  applies them, runs the project's own tests through a sandboxed `validate_patch`
+  tool, and **rolls back any patch that breaks the suite**.
+- **Dependency reachability** — a static import graph decides whether a
+  vulnerable package is actually imported. Reachable CVEs are **upgraded** in
+  severity; unused ones are **downgraded**, so triage targets what's exploitable.
+- **Threat modeling & exploit chains** — correlates individual findings into
+  end-to-end attack paths (e.g. path-traversal + hardcoded key → credential
+  disclosure), rendered as **Mermaid graphs** in the report.
+- **Container & secret scanning** — Dockerfile/compose/Terraform misconfigurations
+  (unpinned base images, root/privileged containers, open CIDRs) plus
+  entropy-based secret detection with an **LLM pass to weed out dummy credentials**.
+- **Interactive playground** — a web UI to watch code get patched in a
+  side-by-side diff and **chat with the remediation agent over SSE** to refine fixes.
+
 It runs three ways from one codebase: a **CLI**, a **mobile-friendly web app**,
 and a reusable **MCP server** any agent can call.
 
@@ -111,7 +130,13 @@ SGAI's web app is mobile-first:
 
 Paste a `requirements.txt` and/or some code (or click **Use sample vulnerable
 input**), tap **Scan**, and get a ranked report with a risk summary, findings +
-fixes, and the "changes since last scan" diff — no install on the phone.
+fixes, and the "changes since last scan" diff — no install on the phone. The UI
+has three tabs:
+
+1. **Scan Results** — the ranked report, with exploit-chain **Mermaid** diagrams.
+2. **Code Playground** — paste code and watch SGAI patch it in a **side-by-side diff**.
+3. **Interactive Agent Chat** — chat with the remediation agent over **SSE** to
+   refine a fix, then apply it back into the playground.
 
 ## Demo commands
 
@@ -142,6 +167,9 @@ uv run sgai scan ./path --sarif out.sarif        # SARIF 2.1.0 for code scanning
 uv run sgai fix ./examples/vulnerable_app     # preview dependency upgrades (dry run)
 uv run sgai fix . --open-pr                    # open a remediation PR (repo you own)
 
+uv run sgai heal ./path --dry-run             # preview AST-safe code patches (diff)
+uv run sgai heal ./path                        # apply patches, validated by the repo's tests
+
 uv run sgai scan ./path --explain             # multi-agent narrated report (Gemini)
 uv run sgai history ./path                     # scan timeline (new/fixed over time)
 uv run sgai accept ./path <finding-id> --reason "tracked in JIRA-123"
@@ -163,6 +191,9 @@ Running `python -m sgai.mcp_server.server` gives any MCP client these tools:
 | `scan_requirements_file` | Audit a whole `requirements.txt` |
 | `run_static_analysis` | Bandit static analysis (Python) |
 | `run_semgrep` | Multi-language static analysis (optional) |
+| `scan_dockerfile` | Dockerfile / compose / Terraform misconfiguration checks |
+| `scan_secrets` | High-entropy + known-format secret detection (LLM dummy filtering) |
+| `validate_patch` | Run the target project's own tests inside the sandbox (self-healing) |
 | `list_source_files` / `read_source_file` | Sandboxed source access |
 
 Wiring it into Antigravity, Claude Code, or the Gemini CLI: see

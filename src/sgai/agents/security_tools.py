@@ -21,6 +21,8 @@ from mcp import StdioServerParameters
 SCANNER_TOOLS = ["list_source_files", "read_source_file"]
 DEPENDENCY_TOOLS = ["list_source_files", "scan_requirements_file"]
 STATIC_ANALYSIS_TOOLS = ["list_source_files", "run_static_analysis"]
+HEALER_TOOLS = ["list_source_files", "read_source_file", "run_static_analysis", "validate_patch"]
+CONTAINER_TOOLS = ["list_source_files", "scan_dockerfile", "scan_secrets"]
 
 
 def build_security_toolset(tool_filter: list[str] | None = None) -> MCPToolset:

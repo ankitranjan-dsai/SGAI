@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from sgai.models import Finding, Severity
 from sgai.risk import severity_counts
+from sgai.threats import detect_exploit_chains, render_threat_section
 
 if TYPE_CHECKING:
     from sgai.memory import ScanDiff
@@ -105,9 +106,19 @@ def build_markdown_report(
 
     for i, f in enumerate(findings, 1):
         issue = f.title.replace("|", "\\|")
+        reach = ""
+        if f.reachable is True:
+            reach = " ⚠️ reachable"
+        elif f.reachable is False:
+            reach = " · unreached"
         lines.append(
-            f"| {i} | {_SEVERITY_EMOJI[f.severity]} {f.severity.label} | {f.source} | `{f.location}` | {issue} |"
+            f"| {i} | {_SEVERITY_EMOJI[f.severity]} {f.severity.label} | {f.source} | `{f.location}` | {issue}{reach} |"
         )
+
+    # Correlate findings into end-to-end attack paths, rendered as Mermaid graphs.
+    chains = detect_exploit_chains(findings)
+    if chains:
+        lines += [""] + render_threat_section(chains)
 
     lines += ["", "## Remediation", ""]
     for i, f in enumerate(findings, 1):

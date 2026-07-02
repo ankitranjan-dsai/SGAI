@@ -17,17 +17,28 @@ from sgai.config import MODEL
 
 
 def build_triage_agent() -> LlmAgent:
-    """Assess overall risk posture and surface the most urgent issues."""
+    """Assess overall risk posture, surface urgent issues, and model exploit chains."""
     return LlmAgent(
         name="triage_agent",
         model=MODEL,
-        description="Security triage analyst.",
+        description="Security triage analyst and threat modeler.",
         output_key="triage",
         instruction=(
-            "You are a security triage analyst. The conversation contains a JSON list "
-            "of security findings (each with id, source, severity, location, and "
-            "remediation). Assess the overall risk posture in 2-3 sentences, then list "
-            "the top 3 most urgent issues to fix first and why. Be concise and specific."
+            "You are a security triage analyst and threat modeler. The conversation "
+            "contains a JSON list of security findings (each with id, source, severity, "
+            "location, remediation, and — for dependencies — a `reachable` flag) and may "
+            "include a list of pre-computed exploit chains.\n\n"
+            "Do three things:\n"
+            "1. Assess the overall risk posture in 2-3 sentences. Treat `reachable: true` "
+            "dependency vulnerabilities as more urgent than unreached ones.\n"
+            "2. List the top 3 most urgent issues to fix first and why.\n"
+            "3. THREAT MODELING — reason about how findings COMBINE into exploit chains. "
+            "Explicitly look for multi-step attacks, e.g. a path-traversal flaw that lets "
+            "an attacker read a file containing a hardcoded API key, or a code-execution "
+            "sink reached through a vulnerable dependency. For each chain, describe the "
+            "attacker's steps from entry point to impact. If exploit chains are provided "
+            "in the input, validate and expand on them; otherwise derive them yourself. "
+            "Be concise and specific."
         ),
     )
 

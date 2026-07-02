@@ -12,11 +12,17 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sgai.manifests import MANIFEST_GLOBS
+from sgai.manifests import COMPOSE_GLOBS, CONTAINER_GLOBS, IAC_GLOBS, MANIFEST_GLOBS
 from sgai.mcp_server import server
 from sgai.models import Finding
 from sgai.report import build_markdown_report
-from sgai.risk import assess
+from sgai.risk import (
+    apply_reachability,
+    assess,
+    build_import_graph,
+    findings_from_container_scan,
+    findings_from_secret_scan,
+)
 
 if TYPE_CHECKING:
     from sgai.memory import ScanDiff, ScanMemory
@@ -62,8 +68,22 @@ async def gather_findings(repo: str, deep: bool = False) -> list[Finding]:
     static_result = server.run_static_analysis(".", str(root))
     semgrep_result = server.run_semgrep(".", str(root)) if deep else None
 
-    # 3. Score, de-duplicate, and rank.
-    return assess(dep_result, static_result, semgrep_result)
+    # 3. Audit container/IaC manifests and hunt for leaked secrets.
+    extra: list[Finding] = []
+    for glob in [*CONTAINER_GLOBS, *COMPOSE_GLOBS, *IAC_GLOBS]:
+        for cfg in sorted(root.rglob(glob)):
+            if _SKIP_DIRS & set(cfg.parts):
+                continue
+            res = server.scan_dockerfile(str(cfg), str(root))
+            extra += findings_from_container_scan(res, str(cfg.relative_to(root)))
+    extra += findings_from_secret_scan(server.scan_secrets(".", str(root)))
+
+    # 4. Score, de-duplicate, and rank everything together.
+    findings = assess(dep_result, static_result, semgrep_result, extra=extra)
+
+    # 5. Reachability: upgrade vulnerable packages the code actually imports,
+    #    downgrade the ones it provably never touches.
+    return apply_reachability(findings, build_import_graph(str(root)))
 
 
 async def run_scan(

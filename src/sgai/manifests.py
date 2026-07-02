@@ -99,3 +99,117 @@ def parse_manifest(path: Path) -> list[dict]:
     if name == "Cargo.lock":
         return _parse_cargo_lock(text)
     return []
+
+
+# --------------------------------------------------------------------------- #
+# Container & infrastructure-as-code parsers
+#
+# These describe *configuration*, not dependencies, so they return structured
+# directives rather than OSV packages. The scan_dockerfile MCP tool turns them
+# into security findings (insecure base images, privileged users, open CIDRs).
+# --------------------------------------------------------------------------- #
+
+# Filenames the container/IaC scanner recognizes.
+CONTAINER_GLOBS = ["Dockerfile", "Dockerfile.*", "*.Dockerfile"]
+COMPOSE_GLOBS = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
+IAC_GLOBS = ["*.tf"]
+
+
+def parse_dockerfile(text: str) -> list[dict]:
+    """Dockerfile → ordered instructions ``{instruction, argument, line}``.
+
+    Line continuations (``\\``) are folded into a single logical instruction,
+    and comments/blank lines are dropped. The ``line`` is where the instruction
+    began, so findings point at the real source line.
+    """
+    instructions: list[dict] = []
+    buffer = ""
+    start_line = 0
+    for i, raw in enumerate(text.splitlines(), 1):
+        stripped = raw.strip()
+        if not buffer:
+            if not stripped or stripped.startswith("#"):
+                continue
+            start_line = i
+            buffer = stripped
+        else:
+            buffer += " " + stripped
+        if buffer.endswith("\\"):
+            buffer = buffer[:-1].rstrip()
+            continue
+        parts = buffer.split(None, 1)
+        instructions.append(
+            {
+                "instruction": parts[0].upper(),
+                "argument": parts[1].strip() if len(parts) > 1 else "",
+                "line": start_line,
+            }
+        )
+        buffer = ""
+    if buffer:  # trailing instruction ending in a continuation
+        parts = buffer.split(None, 1)
+        instructions.append(
+            {
+                "instruction": parts[0].upper(),
+                "argument": parts[1].strip() if len(parts) > 1 else "",
+                "line": start_line,
+            }
+        )
+    return instructions
+
+
+def parse_compose(text: str) -> dict:
+    """docker-compose.yml → ``{services: [...]}`` with security-relevant fields."""
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - PyYAML ships with bandit
+        return {"services": []}
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return {"services": []}
+    services = []
+    for name, cfg in (data.get("services") or {}).items():
+        cfg = cfg or {}
+        services.append(
+            {
+                "name": name,
+                "image": cfg.get("image"),
+                "privileged": bool(cfg.get("privileged", False)),
+                "user": cfg.get("user"),
+                "ports": cfg.get("ports") or [],
+                "environment": cfg.get("environment"),
+                "cap_add": cfg.get("cap_add") or [],
+                "volumes": cfg.get("volumes") or [],
+            }
+        )
+    return {"services": services}
+
+
+_TF_BLOCK = re.compile(
+    r"^\s*(resource|data|module|provider|variable|output)\s+(.*?)\{", re.IGNORECASE
+)
+_TF_ASSIGN = re.compile(r'^\s*([A-Za-z0-9_.\-]+)\s*=\s*(.+?)\s*$')
+
+
+def parse_terraform(text: str) -> dict:
+    """Terraform HCL → ``{blocks, assignments}`` via a lightweight line parser.
+
+    Full HCL parsing needs a real grammar; for security heuristics we only need
+    block headers (``resource "aws_s3_bucket" "x"``) and simple ``key = value``
+    assignments, which a line scanner extracts reliably enough.
+    """
+    blocks: list[dict] = []
+    assignments: list[dict] = []
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].split("//", 1)[0]
+        block = _TF_BLOCK.search(line)
+        if block:
+            labels = re.findall(r'"([^"]+)"', block.group(2))
+            blocks.append({"type": block.group(1).lower(), "labels": labels, "line": i})
+            continue
+        assign = _TF_ASSIGN.match(line)
+        if assign:
+            value = assign.group(2).strip().strip('"')
+            assignments.append({"key": assign.group(1), "value": value, "line": i})
+    return {"blocks": blocks, "assignments": assignments}
