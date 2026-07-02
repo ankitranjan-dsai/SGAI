@@ -314,6 +314,72 @@ def heal(req: HealRequest) -> HealResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Commit Patch: write a validated patch into a sandboxed local project
+# --------------------------------------------------------------------------- #
+class CommitPatchRequest(BaseModel):
+    root: str  # sandbox root: the local project directory being healed
+    file_path: str  # file to patch, relative to root
+    diff: str = ""  # unified diff to apply to the file's current content
+    content: str = ""  # alternative: full replacement content
+    run_tests: bool = True  # re-run validate_patch after committing
+
+
+class CommitPatchResponse(BaseModel):
+    committed: bool
+    file: str
+    validation: dict | None = None  # validate_patch output when run_tests is set
+
+
+# Roots too broad to ever be a project sandbox — refuse them outright.
+_FORBIDDEN_ROOTS = {Path("/"), Path.home()}
+
+
+@app.post("/commit-patch", response_model=CommitPatchResponse)
+def commit_patch(req: CommitPatchRequest) -> CommitPatchResponse:
+    """Write a patch to a file inside a sandboxed local project root.
+
+    The target path must resolve inside ``root`` via ``safe_resolve`` — path
+    traversal and symlink escapes are rejected. The patch arrives either as a
+    unified ``diff`` (applied strictly against the file's current content) or
+    as full replacement ``content``. When ``run_tests`` is set, the project's
+    own test suite is re-run through the sandboxed ``validate_patch`` tool so
+    the caller immediately learns whether the committed fix is non-breaking.
+    """
+    from sgai.fix import DiffApplyError, apply_unified_diff
+    from sgai.mcp_server.sandbox import SandboxError, safe_resolve
+
+    root = Path(req.root).resolve()
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail=f"root {req.root!r} is not a directory")
+    if root in _FORBIDDEN_ROOTS:
+        raise HTTPException(status_code=400, detail="root is too broad to be a project sandbox")
+
+    try:
+        target = safe_resolve(str(root), req.file_path)
+    except SandboxError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if req.diff.strip():
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail=f"{req.file_path!r} is not a file")
+        try:
+            patched = apply_unified_diff(target.read_text(), req.diff)
+        except DiffApplyError as exc:
+            raise HTTPException(status_code=409, detail=f"diff does not apply: {exc}") from exc
+        target.write_text(patched)
+    elif req.content:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(req.content)
+    else:
+        raise HTTPException(status_code=400, detail="provide either a diff or content")
+
+    validation = server.validate_patch(str(root)) if req.run_tests else None
+    return CommitPatchResponse(
+        committed=True, file=str(target.relative_to(root)), validation=validation
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Interactive Agent Chat (SSE): refine remediation patches conversationally
 # --------------------------------------------------------------------------- #
 class ChatRequest(BaseModel):

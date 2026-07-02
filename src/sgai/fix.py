@@ -150,12 +150,16 @@ class PatchRule:
     pattern is not present (the finding pointed somewhere this rule can't fix).
     ``needs_import`` names a stdlib module the patched line relies on; it is
     inserted once per file if not already imported.
+    ``confidence`` (0.0–1.0) estimates how likely the rewrite is to preserve
+    behavior; high-confidence patches are applied first so the rollback search
+    discards the risky ones before the safe ones.
     """
 
     rule_id: str
     description: str
     rewrite: Callable[[str], str | None]
     needs_import: str | None = None
+    confidence: float = 1.0
 
 
 def _rewrite_yaml_load(line: str) -> str | None:
@@ -218,31 +222,47 @@ def _rewrite_verify_false(line: str) -> str | None:
 # Registry keyed by Bandit test id, with alias substrings so equivalent Semgrep
 # check ids (e.g. "avoid-eval", "yaml-load") map onto the same refactoring.
 _PATCH_RULES: dict[str, PatchRule] = {
-    "B506": PatchRule("B506", "Use yaml.safe_load() instead of yaml.load()", _rewrite_yaml_load),
+    "B506": PatchRule(
+        "B506", "Use yaml.safe_load() instead of yaml.load()", _rewrite_yaml_load,
+        confidence=0.95,  # safe_load is a drop-in unless custom tags are parsed
+    ),
     "B307": PatchRule(
-        "B307", "Replace eval() with ast.literal_eval()", _rewrite_eval, needs_import="ast"
+        "B307", "Replace eval() with ast.literal_eval()", _rewrite_eval, needs_import="ast",
+        confidence=0.55,  # literal_eval rejects names/expressions eval resolved
     ),
     "B602": PatchRule(
         "B602",
         "Drop shell=True; tokenize the command with shlex.split()",
         _rewrite_shell_true,
         needs_import="shlex",
+        confidence=0.7,  # breaks commands that relied on shell features (pipes, globs)
     ),
     "B604": PatchRule(
         "B604",
         "Drop shell=True; tokenize the command with shlex.split()",
         _rewrite_shell_true,
         needs_import="shlex",
+        confidence=0.7,
     ),
-    "B303": PatchRule("B303", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash),
-    "B324": PatchRule("B324", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash),
+    "B303": PatchRule(
+        "B303", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash,
+        confidence=0.8,  # digests change length; stored-hash comparisons may break
+    ),
+    "B324": PatchRule(
+        "B324", "Replace weak hash with hashlib.sha256()", _rewrite_weak_hash,
+        confidence=0.8,
+    ),
     "B105": PatchRule(
         "B105",
         "Move the hardcoded secret to an environment variable",
         _rewrite_hardcoded_secret,
         needs_import="os",
+        confidence=0.6,  # runtime behavior depends on the env var being set
     ),
-    "B501": PatchRule("B501", "Re-enable TLS certificate verification", _rewrite_verify_false),
+    "B501": PatchRule(
+        "B501", "Re-enable TLS certificate verification", _rewrite_verify_false,
+        confidence=0.9,  # only fails against endpoints with invalid certificates
+    ),
 }
 
 # Semgrep check ids vary by ruleset; match them onto Bandit-equivalent rules by
@@ -280,6 +300,7 @@ class CodePatch:
     description: str
     original_line: str
     patched_line: str
+    confidence: float = 1.0  # from the PatchRule that produced it
 
 
 @dataclass
@@ -347,6 +368,9 @@ def _targets_from_findings(findings: list[Finding]) -> list[tuple[str, int, str]
             continue  # Bandit and Semgrep often flag the same line
         seen.add(key)
         targets.append((file, int(line), rule.rule_id))
+    # High-confidence rewrites first: the rollback search then discards the
+    # risky, low-confidence patches before it ever questions the safe ones.
+    targets.sort(key=lambda t: _PATCH_RULES[t[2]].confidence, reverse=True)
     return targets
 
 
@@ -404,6 +428,7 @@ def build_patch_plan(repo_dir: str, targets: list[tuple[str, int, str]]) -> Patc
                     description=rule.description,
                     original_line=original_line.rstrip("\n"),
                     patched_line=patched_line.rstrip("\n"),
+                    confidence=rule.confidence,
                 )
             )
 
@@ -442,6 +467,72 @@ def rollback_patch_plan(repo_dir: str, plan: PatchPlan) -> None:
         (root / file).write_text(content)
 
 
+class DiffApplyError(Exception):
+    """Raised when a unified diff does not apply cleanly to the target text."""
+
+
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def apply_unified_diff(original: str, diff: str) -> str:
+    """Apply a unified diff to ``original`` and return the patched text.
+
+    Strict by design: every context and deletion line must match the original
+    exactly at the position the hunk header claims, otherwise
+    :class:`DiffApplyError` is raised — a stale or hand-edited diff must never
+    silently corrupt a file.
+    """
+    src = original.splitlines()
+    out: list[str] = []
+    pos = 0  # 0-based cursor into src
+
+    hunks_seen = 0
+    lines = diff.splitlines()
+    i = 0
+    while i < len(lines):
+        header = _HUNK_HEADER.match(lines[i])
+        if not header:
+            i += 1
+            continue
+        hunks_seen += 1
+        old_start = int(header.group(1))
+        # An empty original file is addressed as line 0; clamp to keep 0-based math sane.
+        hunk_pos = max(old_start - 1, 0)
+        if hunk_pos < pos:
+            raise DiffApplyError(f"hunk at line {old_start} overlaps a previous hunk")
+        out.extend(src[pos:hunk_pos])
+        pos = hunk_pos
+        i += 1
+        while i < len(lines) and not _HUNK_HEADER.match(lines[i]):
+            line = lines[i]
+            if line.startswith("\\"):  # "\ No newline at end of file"
+                i += 1
+                continue
+            tag, body = line[:1], line[1:]
+            if tag == " " or line == "":
+                if pos >= len(src) or src[pos] != body:
+                    raise DiffApplyError(f"context mismatch at original line {pos + 1}")
+                out.append(body)
+                pos += 1
+            elif tag == "-":
+                if pos >= len(src) or src[pos] != body:
+                    raise DiffApplyError(f"deletion mismatch at original line {pos + 1}")
+                pos += 1
+            elif tag == "+":
+                out.append(body)
+            else:
+                break  # not a hunk body line — end of this hunk
+            i += 1
+
+    if hunks_seen == 0:
+        raise DiffApplyError("no @@ hunks found in the diff")
+    out.extend(src[pos:])
+    patched = "\n".join(out)
+    if original.endswith("\n") or (not original and patched):
+        patched += "\n"
+    return patched
+
+
 @dataclass
 class HealResult:
     """Outcome of a self-healing run."""
@@ -452,6 +543,34 @@ class HealResult:
     tests_ran: bool = False
     tests_passed: bool | None = None
     detail: str = ""
+
+
+_Target = tuple[str, int, str]  # (file, line, rule_id)
+
+
+def _bisect_breaking_targets(
+    repo_dir: str,
+    candidates: list[_Target],
+    good: list[_Target],
+    passes: Callable[[list[_Target]], bool],
+) -> tuple[list[_Target], list[_Target]]:
+    """Delta-debug the patch set: find the minimal breaking subset by bisection.
+
+    Invariant: ``good`` is a patch set already known to pass the tests. Returns
+    ``(kept, dropped)`` where ``kept ⊇ good`` passes and ``dropped`` is the
+    minimal set of individually-blamed patches. Costs O(b·log n) test runs for
+    b breaking patches among n, versus O(n) for one-at-a-time rollback.
+    """
+    if not candidates:
+        return good, []
+    if passes(good + candidates):
+        return good + candidates, []
+    if len(candidates) == 1:
+        return good, candidates
+    mid = len(candidates) // 2
+    kept, dropped_left = _bisect_breaking_targets(repo_dir, candidates[:mid], good, passes)
+    kept, dropped_right = _bisect_breaking_targets(repo_dir, candidates[mid:], kept, passes)
+    return kept, dropped_left + dropped_right
 
 
 async def heal(
@@ -506,29 +625,41 @@ async def heal(
     if result.get("passed"):
         return HealResult(applied=plan.patches, plan=plan, tests_ran=True, tests_passed=True)
 
-    # Rollback loop: retract patches from the end until the suite is green.
-    active = list(targets)
-    all_patches = {(p.file, p.line): p for p in plan.patches}
-    rejected: list[CodePatch] = []
+    # Binary-search rollback: delta-debug the target list to isolate the minimal
+    # breaking subset instead of retracting patches one at a time. Targets are
+    # already ordered by confidence, so risky patches are blamed first.
     rollback_patch_plan(repo_dir, plan)
-    while active:
-        dropped = active.pop()
-        if (dropped[0], dropped[1]) in all_patches:
-            rejected.insert(0, all_patches[(dropped[0], dropped[1])])
-        subplan = build_patch_plan(repo_dir, active)
-        if not subplan.patches:
-            continue
-        apply_patch_plan(repo_dir, subplan)
-        result = server.validate_patch(repo_dir)
-        if result.get("passed"):
-            return HealResult(
-                applied=subplan.patches, rejected=rejected, plan=subplan,
-                tests_ran=True, tests_passed=True,
-                detail=f"rolled back {len(rejected)} patch(es) that broke the tests",
-            )
-        rollback_patch_plan(repo_dir, subplan)
+    verdicts: dict[tuple[_Target, ...], bool] = {tuple(targets): False}  # full set: known red
 
+    def _passes(subset: list[_Target]) -> bool:
+        key = tuple(subset)
+        if key in verdicts:
+            return verdicts[key]
+        subplan = build_patch_plan(repo_dir, subset)
+        if not subplan.patches:
+            verdicts[key] = True  # nothing applied — the baseline suite is green
+            return True
+        apply_patch_plan(repo_dir, subplan)
+        outcome = bool(server.validate_patch(repo_dir).get("passed"))
+        rollback_patch_plan(repo_dir, subplan)
+        verdicts[key] = outcome
+        return outcome
+
+    kept, dropped = _bisect_breaking_targets(repo_dir, list(targets), [], _passes)
+
+    all_patches = {(p.file, p.line): p for p in plan.patches}
+    rejected = [all_patches[(f, ln)] for f, ln, _ in dropped if (f, ln) in all_patches]
+    if not kept:
+        return HealResult(
+            rejected=list(plan.patches), tests_ran=True, tests_passed=False,
+            detail="every patch combination broke the tests; all patches rolled back",
+        )
+
+    final_plan = build_patch_plan(repo_dir, kept)
+    apply_patch_plan(repo_dir, final_plan)
     return HealResult(
-        rejected=list(plan.patches), tests_ran=True, tests_passed=False,
-        detail="every patch combination broke the tests; all patches rolled back",
+        applied=final_plan.patches, rejected=rejected, plan=final_plan,
+        tests_ran=True, tests_passed=True,
+        detail=f"rolled back {len(rejected)} patch(es) that broke the tests "
+               f"(isolated by binary search)",
     )

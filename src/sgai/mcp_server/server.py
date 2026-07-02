@@ -761,25 +761,111 @@ def _gemini_secret_classifier(candidates: list[dict]) -> list[bool]:
 # --------------------------------------------------------------------------- #
 # Patch validation (the self-healing loop's safety net)
 # --------------------------------------------------------------------------- #
+
+# A patched project's tests are untrusted code: a malicious or hanging suite
+# must never stall the server. Every test subprocess gets a strict wall-clock
+# cap; callers may lower it but can never raise it past the hard ceiling.
+_TEST_TIMEOUT_DEFAULT = 30
+_TEST_TIMEOUT_CEILING = 120
+
+_TEST_SKIP_DIRS = {".venv", "venv", "node_modules", ".git", "target", "__pycache__"}
+
+
+def _has_files(target: Path, predicate: Callable[[Path], bool]) -> bool:
+    return any(
+        predicate(p)
+        for p in target.rglob("*")
+        if p.is_file() and not _TEST_SKIP_DIRS & set(p.parts)
+    )
+
+
+def _detect_test_frameworks(target: Path) -> list[dict[str, Any]]:
+    """Detect every runnable test framework in ``target``.
+
+    Returns ``[{framework, cmd}]`` for each detected suite whose runner binary
+    is actually installed. Detection is deterministic file inspection — no
+    project-supplied command is ever executed verbatim.
+    """
+    frameworks: list[dict[str, Any]] = []
+
+    if _has_files(target, lambda p: p.name.startswith("test_") and p.suffix == ".py"
+                  or p.name.endswith("_test.py")):
+        frameworks.append({
+            "framework": "pytest",
+            "cmd": [sys.executable, "-m", "pytest", "-q", "--no-header",
+                    "-p", "no:cacheprovider", str(target)],
+        })
+
+    package_json = target / "package.json"
+    if package_json.is_file():
+        try:
+            scripts = json.loads(package_json.read_text()).get("scripts", {})
+        except (json.JSONDecodeError, OSError):
+            scripts = {}
+        test_script = scripts.get("test", "")
+        # npm init's placeholder script only echoes an error — not a real suite.
+        if test_script and "no test specified" not in test_script:
+            if shutil.which("npm"):
+                frameworks.append({"framework": "npm", "cmd": ["npm", "test", "--silent"]})
+
+    if (target / "go.mod").is_file() and _has_files(target, lambda p: p.name.endswith("_test.go")):
+        if shutil.which("go"):
+            frameworks.append({"framework": "go", "cmd": ["go", "test", "./..."]})
+
+    if (target / "Cargo.toml").is_file():
+        if shutil.which("cargo"):
+            frameworks.append({"framework": "cargo", "cmd": ["cargo", "test", "--quiet"]})
+
+    return frameworks
+
+
+def _run_test_command(cmd: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+    """Run one detected test command under the strict timeout."""
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, cwd=str(cwd), check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ran": True, "passed": False, "reason": f"tests timed out after {timeout}s"}
+    except (FileNotFoundError, OSError) as exc:
+        return {"ran": False, "passed": None, "reason": str(exc)}
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    # pytest exit code 5 means "no tests collected" — treat like "no tests".
+    if cmd[1:3] == ["-m", "pytest"] and proc.returncode == 5:
+        return {"ran": False, "passed": None, "reason": "no tests collected"}
+    return {
+        "ran": True,
+        "passed": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "output": output[-4000:],  # tail only; suites can be huge
+    }
+
+
 @mcp.tool()
-def validate_patch(root: str, path: str = ".", timeout_seconds: int = 300) -> dict[str, Any]:
-    """Run the target project's own test suite inside the sandbox root.
+def validate_patch(root: str, path: str = ".", timeout_seconds: int = _TEST_TIMEOUT_DEFAULT) -> dict[str, Any]:
+    """Run the target project's own test suite(s) inside the sandbox root.
 
     Used by the code-healer to prove a security patch is non-breaking: tests are
     run before and after patching, and any patch that turns a green suite red is
-    rolled back. Only ``pytest`` is executed — never an arbitrary command from
-    the model — and only inside the sandboxed root.
+    rolled back. Test frameworks are auto-detected per language — ``pytest``
+    (Python), ``npm test`` (Node.js with a real test script), ``go test ./...``
+    (Go), and ``cargo test`` (Rust) — never an arbitrary command from the model,
+    and only inside the sandboxed root. Every subprocess is bounded by a strict
+    timeout so a malicious or hanging suite cannot stall the server.
 
     Args:
         root: Sandbox root of the project under repair.
         path: Directory whose tests to run (relative to ``root``); defaults
             to the whole project.
-        timeout_seconds: Hard cap on the test run.
+        timeout_seconds: Wall-clock cap per test command; hard-capped at
+            ``_TEST_TIMEOUT_CEILING`` regardless of the value passed.
 
     Returns:
-        ``{ran, passed, exit_code, output}`` — ``ran`` is False (with a
-        ``reason``) when no test suite exists, so callers can tell "no tests"
-        apart from "tests failed".
+        ``{ran, passed, exit_code, output, frameworks}`` — ``ran`` is False
+        (with a ``reason``) when no test suite exists, so callers can tell
+        "no tests" apart from "tests failed". ``frameworks`` carries the
+        per-language results when more than one suite was detected.
     """
     try:
         target = safe_resolve(root, path)
@@ -788,35 +874,32 @@ def validate_patch(root: str, path: str = ".", timeout_seconds: int = 300) -> di
     if not target.is_dir():
         return {"ran": False, "passed": None, "reason": f"{path!r} is not a directory"}
 
-    has_tests = any(
-        p.name.startswith("test_") or p.name.endswith("_test.py")
-        for p in target.rglob("*.py")
-        if ".venv" not in p.parts and "node_modules" not in p.parts
-    )
-    if not has_tests:
+    timeout = max(1, min(int(timeout_seconds), _TEST_TIMEOUT_CEILING))
+    frameworks = _detect_test_frameworks(target)
+    if not frameworks:
         return {"ran": False, "passed": None, "reason": "no test files found"}
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", str(target)],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            cwd=str(target),
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ran": True, "passed": False, "reason": f"tests timed out after {timeout_seconds}s"}
+    results: list[dict[str, Any]] = []
+    for fw in frameworks:
+        outcome = _run_test_command(fw["cmd"], target, timeout)
+        results.append({"framework": fw["framework"], **outcome})
 
-    output = (proc.stdout or "") + (proc.stderr or "")
-    # pytest exit code 5 means "no tests collected" — treat like "no tests".
-    if proc.returncode == 5:
-        return {"ran": False, "passed": None, "reason": "no tests collected"}
+    ran_results = [r for r in results if r["ran"]]
+    if not ran_results:
+        return {
+            "ran": False, "passed": None,
+            "reason": "; ".join(r.get("reason", "did not run") for r in results),
+            "frameworks": results,
+        }
+
+    passed = all(r["passed"] for r in ran_results)
+    failed = next((r for r in ran_results if not r["passed"]), ran_results[-1])
     return {
         "ran": True,
-        "passed": proc.returncode == 0,
-        "exit_code": proc.returncode,
-        "output": output[-4000:],  # tail only; suites can be huge
+        "passed": passed,
+        "exit_code": failed.get("exit_code", 0 if passed else 1),
+        "output": failed.get("output", failed.get("reason", "")),
+        "frameworks": results,
     }
 
 
