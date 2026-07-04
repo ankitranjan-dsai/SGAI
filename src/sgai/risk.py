@@ -96,26 +96,32 @@ def findings_from_semgrep(result: dict) -> list[Finding]:
 
 
 def findings_from_dependency_scan(result: dict) -> list[Finding]:
-    """Convert ``scan_requirements_file`` output into normalized findings.
+    """Convert ``scan_requirements_file``/``scan_manifest`` output into findings.
 
-    The batch OSV query returns advisory IDs without CVSS, so a known CVE in a
-    pinned dependency is treated as HIGH by default — a defensible floor, since
-    an unpatched, publicly disclosed vulnerability is shipping in the build.
+    Severity comes from the worst advisory's CVSS score (mapped to the standard
+    qualitative bands) when the scanner could enrich it. A known CVE with no
+    severity signal falls back to HIGH — a defensible default, since an
+    unpatched, publicly disclosed vulnerability is shipping in the build.
     """
     findings: list[Finding] = []
     for v in result.get("vulnerable", []):
         package, version = v.get("package", "?"), v.get("version", "?")
         ecosystem = v.get("ecosystem", "PyPI")
         ids = v.get("vuln_ids", [])
+        severity = _NAMED_SEVERITY.get(str(v.get("severity") or "").upper(), Severity.HIGH)
+        cvss_score = v.get("cvss_score")
+        detail = "Advisories: " + ", ".join(ids)
+        if cvss_score is not None:
+            detail += f" (worst CVSS {cvss_score:.1f})"
         findings.append(
             Finding(
                 id=ids[0] if ids else f"{package}-vuln",
                 source="dependency",
                 title=f"{package} {version} ({ecosystem}) has {len(ids)} known vulnerabilit"
                 + ("y" if len(ids) == 1 else "ies"),
-                severity=Severity.HIGH,
+                severity=severity,
                 location=f"{ecosystem}:{package}@{version}",
-                detail="Advisories: " + ", ".join(ids),
+                detail=detail,
                 remediation=f"Upgrade {package} to a patched version; review {ids[0] if ids else 'the advisories'}.",
                 references=ids,
                 manifest=v.get("manifest", ""),

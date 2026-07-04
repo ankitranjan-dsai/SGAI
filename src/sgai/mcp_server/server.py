@@ -18,6 +18,7 @@ Run standalone with::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -32,7 +33,7 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL
+from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL, OSV_VULN_URL
 from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
 mcp = FastMCP("sgai-security-tools")
@@ -111,18 +112,24 @@ async def scan_requirements_file(path: str, root: str) -> dict[str, Any]:
         return {"vulnerable": [], "clean": [], "skipped": skipped}
 
     queries = [{"version": v, "package": {"name": n, "ecosystem": "PyPI"}} for n, v in pins]
+    vulnerable, clean = [], []
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(OSV_QUERY_BATCH_URL, json={"queries": queries})
         resp.raise_for_status()
         results = resp.json().get("results", [])
 
-    vulnerable, clean = [], []
-    for (name, version), result in zip(pins, results):
-        ids = [v.get("id") for v in result.get("vulns", [])]
-        if ids:
-            vulnerable.append({"package": name, "version": version, "vuln_ids": ids})
-        else:
-            clean.append({"package": name, "version": version})
+        for (name, version), result in zip(pins, results):
+            ids = [v.get("id") for v in result.get("vulns", [])]
+            if ids:
+                vulnerable.append({"package": name, "version": version, "vuln_ids": ids})
+            else:
+                clean.append({"package": name, "version": version})
+
+        severity_map = await _osv_severity_map(
+            client, {i for v in vulnerable for i in v["vuln_ids"]}
+        )
+    for v in vulnerable:
+        v["severity"], v["cvss_score"] = _worst_advisory_severity(v["vuln_ids"], severity_map)
 
     return {"vulnerable": vulnerable, "clean": clean, "skipped": skipped}
 
@@ -130,6 +137,94 @@ async def scan_requirements_file(path: str, root: str) -> dict[str, Any]:
 # OSV's querybatch accepts up to 1000 entries; stay well under and keep payloads
 # small so a single large lockfile can't trip request-size limits.
 _OSV_BATCH_SIZE = 100
+
+# Concurrent per-advisory detail fetches. OSV has no batch endpoint for full
+# vulnerability records, so severity enrichment issues one GET per unique ID.
+_OSV_DETAIL_CONCURRENCY = 8
+
+# GHSA labels its advisories LOW/MODERATE/HIGH/CRITICAL; MODERATE is what the
+# rest of the pipeline calls MEDIUM.
+_OSV_LABEL_ALIASES = {"MODERATE": "MEDIUM"}
+
+_SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def severity_from_osv_record(record: dict) -> tuple[str | None, float | None]:
+    """Derive a (severity label, CVSS base score) from a full OSV record.
+
+    Prefers a numeric CVSS vector (v4 > v3 > v2, mapped to the standard
+    qualitative bands: >=9.0 CRITICAL, >=7.0 HIGH, >=4.0 MEDIUM, else LOW) and
+    falls back to the advisory database's own label (e.g. GHSA's
+    ``database_specific.severity``). Returns (None, None) when the record
+    carries no severity signal at all.
+    """
+    from cvss import CVSS2, CVSS3, CVSS4
+    from cvss.exceptions import CVSSError
+
+    parsers = {"CVSS_V4": CVSS4, "CVSS_V3": CVSS3, "CVSS_V2": CVSS2}
+    best_score: float | None = None
+    for entry in sorted(record.get("severity") or [], key=lambda e: e.get("type", ""), reverse=True):
+        parser = parsers.get(entry.get("type", ""))
+        if not parser:
+            continue
+        try:
+            score = float(parser(entry.get("score", "")).scores()[0])
+        except (CVSSError, ValueError, IndexError):
+            continue
+        best_score = score
+        break  # highest CVSS version wins; no need to parse older vectors
+
+    if best_score is not None:
+        if best_score >= 9.0:
+            return "CRITICAL", best_score
+        if best_score >= 7.0:
+            return "HIGH", best_score
+        if best_score >= 4.0:
+            return "MEDIUM", best_score
+        return "LOW", best_score
+
+    label = str((record.get("database_specific") or {}).get("severity") or "").upper()
+    label = _OSV_LABEL_ALIASES.get(label, label)
+    if label in _SEVERITY_RANK:
+        return label, None
+    return None, None
+
+
+async def _osv_severity_map(
+    client: httpx.AsyncClient, vuln_ids: set[str]
+) -> dict[str, tuple[str | None, float | None]]:
+    """Fetch full records for each advisory ID and derive severities.
+
+    Fetches run concurrently under a semaphore; an advisory that cannot be
+    fetched simply yields (None, None) so enrichment never fails a scan.
+    """
+    semaphore = asyncio.Semaphore(_OSV_DETAIL_CONCURRENCY)
+
+    async def fetch(vuln_id: str) -> tuple[str, tuple[str | None, float | None]]:
+        async with semaphore:
+            try:
+                resp = await client.get(f"{OSV_VULN_URL}/{vuln_id}")
+                resp.raise_for_status()
+                return vuln_id, severity_from_osv_record(resp.json())
+            except (httpx.HTTPError, ValueError):
+                return vuln_id, (None, None)
+
+    return dict(await asyncio.gather(*(fetch(v) for v in vuln_ids)))
+
+
+def _worst_advisory_severity(
+    ids: list[str], severity_map: dict[str, tuple[str | None, float | None]]
+) -> tuple[str | None, float | None]:
+    """The package's severity is its worst advisory's severity."""
+    worst_label: str | None = None
+    worst_score: float | None = None
+    for vuln_id in ids:
+        label, score = severity_map.get(vuln_id, (None, None))
+        if label and _SEVERITY_RANK[label] > _SEVERITY_RANK.get(worst_label or "", 0):
+            worst_label, worst_score = label, score
+        if score is not None and worst_label == label:
+            worst_score = max(worst_score or 0.0, score)
+    return worst_label, worst_score
 
 
 async def _osv_query_chunk(client: httpx.AsyncClient, chunk: list[dict]) -> list[dict]:
@@ -214,6 +309,12 @@ async def scan_manifest(path: str, root: str) -> dict[str, Any]:
                     )
                 else:
                     clean_count += 1
+
+        severity_map = await _osv_severity_map(
+            client, {i for v in vulnerable for i in v["vuln_ids"]}
+        )
+    for v in vulnerable:
+        v["severity"], v["cvss_score"] = _worst_advisory_severity(v["vuln_ids"], severity_map)
 
     return {"vulnerable": vulnerable, "clean_count": clean_count, "ecosystem": packages[0]["ecosystem"]}
 

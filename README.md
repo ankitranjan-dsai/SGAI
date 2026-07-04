@@ -75,6 +75,11 @@ fingerprints in a JSON `ScanMemory`) — SGAI adds:
   import closure**, and a multi-language import graph (Python, JS/TS, Go, Rust).
   Test-only imports are downgraded; production imports upgraded. Each finding
   carries a tri-state `reachability` (`production` / `test_only` / `unreached`).
+- **CVSS-accurate dependency severity** — each advisory's full OSV record is
+  fetched and its CVSS vector (v4 > v3 > v2) scored into the standard bands
+  (≥9.0 Critical, ≥7.0 High, ≥4.0 Medium, else Low), falling back to the
+  database's own label, then HIGH only when no signal exists — so a CVSS 9.8
+  RCE and a CVSS 3.1 ReDoS no longer rank identically.
 - **Typosquatting detector** — flags dependency names one edit, an adjacent
   transposition, a homoglyph, or an affix away from a popular package
   (`requsts`, `lodahs`, `crypt0graphy`, `requests2`) — supply-chain risk caught

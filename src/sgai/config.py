@@ -23,6 +23,7 @@ GITHUB_TOKEN: str | None = os.getenv("GITHUB_TOKEN") or None
 # OSV.dev public vulnerability database endpoints (no auth required).
 OSV_QUERY_URL: str = "https://api.osv.dev/v1/query"
 OSV_QUERY_BATCH_URL: str = "https://api.osv.dev/v1/querybatch"
+OSV_VULN_URL: str = "https://api.osv.dev/v1/vulns"
 
 # Network timeout (seconds) for outbound calls to OSV.dev.
 HTTP_TIMEOUT: float = 20.0
