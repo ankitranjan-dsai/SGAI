@@ -285,6 +285,44 @@ def _heal(path: str, dry_run: bool, no_validate: bool, deep: bool) -> int:
     return 0 if (result.applied or not result.rejected) else 1
 
 
+def _check(path: str, deep: bool) -> int:
+    """Evaluate the policy gate for a repo; exit non-zero on any violation (CI gate)."""
+    from sgai.github import CloneError, cloned_repo, is_remote
+    from sgai.policy import check as check_policies
+    from sgai.runner import gather_findings
+
+    def _run(repo_dir: str, label: str) -> int:
+        findings = asyncio.run(gather_findings(repo_dir, deep=deep))
+        result = check_policies(findings, repo_dir)
+        console.print(f"[bold]SGAI policy check[/bold] — [cyan]{label}[/cyan]")
+        console.print(f"[dim]Evaluated {len(result.evaluated)} policy(ies) over {len(findings)} findings.[/dim]")
+        if result.passed:
+            console.print("[green]✓ PASS[/green] — all policies satisfied.")
+            return 0
+        for v in result.violations:
+            console.print(f"[red]✗ {v.policy}[/red]: {v.message}")
+            for loc in v.findings[:10]:
+                console.print(f"    [dim]{loc}[/dim]")
+            if len(v.findings) > 10:
+                console.print(f"    [dim]… and {len(v.findings) - 10} more[/dim]")
+        console.print(f"[red]FAIL[/red] — {len(result.violations)} policy violation(s).")
+        return 1
+
+    if is_remote(path):
+        try:
+            with cloned_repo(path) as repo_dir:
+                return _run(str(repo_dir), path)
+        except CloneError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            return 1
+
+    target = Path(path).resolve()
+    if not target.is_dir():
+        console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
+        return 1
+    return _run(str(target), str(target))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sgai", description="Multi-agent security review.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -342,6 +380,14 @@ def main(argv: list[str] | None = None) -> int:
         "--deep", action="store_true", help="Also heal findings from Semgrep (multi-language scan)."
     )
 
+    check = sub.add_parser(
+        "check", help="Evaluate the .sgai/policy.yml gate; exits non-zero on violation (for CI)."
+    )
+    check.add_argument("path", help="Local path or a GitHub URL / owner/repo.")
+    check.add_argument(
+        "--deep", action="store_true", help="Also run Semgrep multi-language static analysis."
+    )
+
     args = parser.parse_args(argv)
     if args.command == "scan":
         return _scan(
@@ -355,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fix(args.path, args.open_pr, args.branch)
     if args.command == "heal":
         return _heal(args.path, args.dry_run, args.no_validate, args.deep)
+    if args.command == "check":
+        return _check(args.path, args.deep)
     parser.print_help()
     return 1
 

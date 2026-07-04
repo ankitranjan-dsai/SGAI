@@ -248,6 +248,80 @@ async def scan_stream(req: ScanRequest) -> StreamingResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Policy-as-Code gate: POST /scan/check
+# --------------------------------------------------------------------------- #
+class CheckRequest(BaseModel):
+    github_url: str = ""
+    requirements: str = ""
+    code: str = ""
+    policy: str = ""  # optional inline .sgai/policy.yml content for submitted code
+
+
+class CheckResponse(BaseModel):
+    passed: bool
+    violations: list[dict]
+    evaluated: list[str]
+    finding_count: int
+
+
+async def _gather_submitted_findings(requirements: str, code: str, root: Path):
+    """Gather findings for submitted requirements/code inside a sandbox root."""
+    dep_result: dict = {"vulnerable": []}
+    if requirements.strip():
+        (root / "requirements.txt").write_text(requirements)
+        dep_result = await server.scan_requirements_file("requirements.txt", str(root))
+    static_result: dict = {"findings": []}
+    if code.strip():
+        (root / "submitted.py").write_text(code)
+        static_result = server.run_static_analysis("submitted.py", str(root))
+    findings = assess(dep_result, static_result)
+    return apply_reachability(findings, build_import_graph(str(root)))
+
+
+@app.post("/scan/check", response_model=CheckResponse)
+async def scan_check(req: CheckRequest) -> CheckResponse:
+    """Evaluate a scan against the policy gate; a CI job blocks on ``passed=false``.
+
+    For a ``github_url`` the repo is cloned, audited, and checked against its own
+    ``.sgai/policy.yml``. For submitted code, an optional inline ``policy`` YAML
+    is honored (else the built-in default policy applies).
+    """
+    from sgai.policy import evaluate_policies, load_policies, parse_policies
+
+    if req.github_url.strip():
+        from sgai.github import CloneError, cloned_repo
+        from sgai.runner import gather_findings
+
+        try:
+            with cloned_repo(req.github_url.strip()) as repo_dir:
+                findings = await gather_findings(str(repo_dir))
+                result = evaluate_policies(findings, load_policies(str(repo_dir)))
+        except CloneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            findings = await _gather_submitted_findings(req.requirements, req.code, root)
+            if req.policy.strip():
+                import yaml
+
+                try:
+                    policies = parse_policies(yaml.safe_load(req.policy) or {})
+                except yaml.YAMLError as exc:
+                    raise HTTPException(status_code=400, detail=f"invalid policy YAML: {exc}") from exc
+                result = evaluate_policies(findings, policies)
+            else:
+                result = evaluate_policies(findings, load_policies(str(root)))
+
+    return CheckResponse(
+        passed=result.passed,
+        violations=[v.to_dict() for v in result.violations],
+        evaluated=result.evaluated,
+        finding_count=len(findings),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Code Playground: self-healing patch preview
 # --------------------------------------------------------------------------- #
 class HealRequest(BaseModel):
