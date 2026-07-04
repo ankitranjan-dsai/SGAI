@@ -89,7 +89,10 @@ async def run_agent_report(
     diff = None
     context = ""
     if memory is not None:
+        from sgai.risk import suppress_dismissed
+
         key = target_key(label, repo)
+        findings = suppress_dismissed(findings, memory.dismissals(key))
         diff = memory.diff(key, findings)
         context = _memory_context(diff)
 

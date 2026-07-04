@@ -181,6 +181,7 @@ class ScanMemory:
     def _target(self, target: str) -> dict:
         entry = self._data["targets"].setdefault(target, {"history": [], "accepted": {}})
         entry.setdefault("chat", [])  # back-compat for stores written before chat existed
+        entry.setdefault("dismissed", {"fingerprints": {}, "patterns": []})
         return entry
 
     # ---- queries ---------------------------------------------------------
@@ -272,6 +273,55 @@ class ScanMemory:
         if existed:
             self._save()
         return existed
+
+    # ---- false-positive dismissals ---------------------------------------
+    def dismissals(self, target: str) -> dict:
+        """The dismissal record for ``target``: ``{fingerprints, patterns}``."""
+        d = self._target(target)["dismissed"]
+        return {"fingerprints": dict(d["fingerprints"]), "patterns": list(d["patterns"])}
+
+    def dismiss(
+        self,
+        target: str,
+        finding_fp: str | None = None,
+        pattern: dict | None = None,
+        reason: str = "",
+    ) -> str:
+        """Dismiss a finding as a false positive, by fingerprint or by pattern.
+
+        A ``pattern`` is a dict with any of ``source``, ``finding_id``, and
+        ``location_glob``; a finding matching all present keys is suppressed on
+        every future scan. Returns the fingerprint or the generated pattern id.
+        """
+        store = self._target(target)["dismissed"]
+        if finding_fp:
+            store["fingerprints"][finding_fp] = {"reason": reason, "at": _now()}
+            self._save()
+            return finding_fp
+        if pattern:
+            pid = "pat-" + json.dumps(pattern, sort_keys=True)
+            entry = {"id": pid, "reason": reason, "at": _now(), **pattern}
+            # Replace an existing identical pattern rather than duplicating it.
+            store["patterns"] = [p for p in store["patterns"] if p.get("id") != pid]
+            store["patterns"].append(entry)
+            self._save()
+            return pid
+        raise ValueError("dismiss requires a finding_fp or a pattern")
+
+    def undismiss(self, target: str, finding_fp: str | None = None, pattern_id: str | None = None) -> bool:
+        """Reverse a dismissal by fingerprint or pattern id. Returns whether one existed."""
+        store = self._target(target)["dismissed"]
+        removed = False
+        if finding_fp and finding_fp in store["fingerprints"]:
+            del store["fingerprints"][finding_fp]
+            removed = True
+        if pattern_id:
+            before = len(store["patterns"])
+            store["patterns"] = [p for p in store["patterns"] if p.get("id") != pattern_id]
+            removed = removed or len(store["patterns"]) != before
+        if removed:
+            self._save()
+        return removed
 
     # ---- chat sessions ---------------------------------------------------
     def chat_session(self, target: str) -> list[dict]:

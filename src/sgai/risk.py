@@ -537,6 +537,50 @@ def score_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: f.risk_score, reverse=True)
 
 
+# --------------------------------------------------------------------------- #
+# False-positive suppression
+# --------------------------------------------------------------------------- #
+
+def _finding_fingerprint(f: Finding) -> str:
+    """The stable ``source:id:location`` fingerprint (mirrors memory.fingerprint)."""
+    return f"{f.source}:{f.id}:{f.location}"
+
+
+def is_finding_dismissed(finding: Finding, dismissals: dict) -> bool:
+    """Whether ``finding`` matches a dismissal record.
+
+    A finding is dismissed when its fingerprint is explicitly dismissed, or when
+    it matches a dismissal *pattern* — every present key of ``source``,
+    ``finding_id`` (exact), and ``location_glob`` (fnmatch) must match.
+    """
+    import fnmatch
+
+    if _finding_fingerprint(finding) in dismissals.get("fingerprints", {}):
+        return True
+    for pattern in dismissals.get("patterns", []):
+        if "source" in pattern and pattern["source"] != finding.source:
+            continue
+        if "finding_id" in pattern and pattern["finding_id"] != finding.id:
+            continue
+        if "location_glob" in pattern and not fnmatch.fnmatch(
+            finding.location, pattern["location_glob"]
+        ):
+            continue
+        return True
+    return False
+
+
+def suppress_dismissed(findings: list[Finding], dismissals: dict) -> list[Finding]:
+    """Drop findings the team has dismissed as false positives.
+
+    Called after scoring so suppression never changes how surviving findings are
+    ranked. An empty/None dismissals record is a no-op.
+    """
+    if not dismissals or not (dismissals.get("fingerprints") or dismissals.get("patterns")):
+        return findings
+    return [f for f in findings if not is_finding_dismissed(f, dismissals)]
+
+
 def severity_counts(findings: list[Finding]) -> dict[Severity, int]:
     """Count findings by severity (only severities that appear)."""
     counts: dict[Severity, int] = {}

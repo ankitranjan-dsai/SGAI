@@ -110,7 +110,12 @@ async def run_scan(
 
     diff = None
     if memory is not None:
+        from sgai.risk import suppress_dismissed
+
         key = target_key(label, repo)
+        # Suppress findings the team has dismissed as false positives *before*
+        # diffing/recording, so a dismissed finding never reappears as "new".
+        findings = suppress_dismissed(findings, memory.dismissals(key))
         diff = memory.diff(key, findings)
 
     report = build_markdown_report(label or repo, findings, diff=diff, repo_dir=repo)

@@ -840,3 +840,51 @@ def clear_chat_session(target: str) -> dict:
     from sgai.memory import ScanMemory
 
     return {"target": target, "cleared": ScanMemory().clear_chat(target)}
+
+
+# --------------------------------------------------------------------------- #
+# False-positive dismissal loop: POST /dismiss and POST /undismiss
+# --------------------------------------------------------------------------- #
+class DismissRequest(BaseModel):
+    target: str
+    fingerprint: str = ""  # exact source:id:location
+    pattern: dict | None = None  # {source?, finding_id?, location_glob?}
+    reason: str = ""
+
+
+class UndismissRequest(BaseModel):
+    target: str
+    fingerprint: str = ""
+    pattern_id: str = ""
+
+
+@app.post("/dismiss")
+def dismiss(req: DismissRequest) -> dict:
+    """Dismiss a finding as a false positive so future scans suppress it.
+
+    Dismiss by exact ``fingerprint`` (``source:id:location``) or by a
+    ``pattern`` (any of ``source``/``finding_id``/``location_glob``).
+    """
+    from sgai.memory import ScanMemory
+
+    if not req.fingerprint and not req.pattern:
+        raise HTTPException(status_code=400, detail="provide a fingerprint or a pattern")
+    memory = ScanMemory()
+    ref = memory.dismiss(
+        req.target, finding_fp=req.fingerprint or None, pattern=req.pattern, reason=req.reason
+    )
+    return {"target": req.target, "dismissed": ref, "dismissals": memory.dismissals(req.target)}
+
+
+@app.post("/undismiss")
+def undismiss(req: UndismissRequest) -> dict:
+    """Reverse a dismissal by fingerprint or pattern id."""
+    from sgai.memory import ScanMemory
+
+    if not req.fingerprint and not req.pattern_id:
+        raise HTTPException(status_code=400, detail="provide a fingerprint or a pattern_id")
+    memory = ScanMemory()
+    removed = memory.undismiss(
+        req.target, finding_fp=req.fingerprint or None, pattern_id=req.pattern_id or None
+    )
+    return {"target": req.target, "removed": removed, "dismissals": memory.dismissals(req.target)}
