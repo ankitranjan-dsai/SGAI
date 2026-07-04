@@ -14,8 +14,10 @@ graph embedded in the Markdown report.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from sgai.models import Finding, Severity
 
@@ -93,6 +95,33 @@ def capabilities_of(finding: Finding) -> set[str]:
         if needle in haystack:
             caps.add(cap)
     return caps
+
+
+# --------------------------------------------------------------------------- #
+# Internet-facing entry-point detection
+# --------------------------------------------------------------------------- #
+
+# Path fragments that mark a file as an externally reachable entry point: an
+# HTTP route/handler, an API surface, or a process main. A chain that begins on
+# one of these is reachable by an unauthenticated attacker, so it is worse.
+_INTERNET_FACING_RE = re.compile(
+    r"(?:^|[/_\-.])(?:api|apis|routes?|routers?|controllers?|handlers?|views?"
+    r"|endpoints?|main|app|server|wsgi|asgi|urls|graphql|webhooks?)(?:[/_\-.]|$)"
+)
+
+
+def is_internet_facing(location: str) -> bool:
+    """Whether a finding's file path looks like an internet-facing entry point."""
+    file = location.replace("\\", "/").rsplit(":", 1)[0]  # strip trailing :line
+    return any(_INTERNET_FACING_RE.search(seg.lower()) for seg in file.split("/"))
+
+
+def mark_internet_facing(findings: list[Finding]) -> list[Finding]:
+    """Tag each code finding with whether it sits on an internet-facing file."""
+    for f in findings:
+        if f.source in ("static", "semgrep", "secret") and ":" in f.location:
+            f.internet_facing = is_internet_facing(f.location)
+    return findings
 
 
 @dataclass(frozen=True)
@@ -177,6 +206,69 @@ _CHAIN_TEMPLATES: list[ChainTemplate] = [
 ]
 
 
+# All capability constants, keyed by name, so custom templates in JSON can
+# reference them symbolically (e.g. "PATH_TRAVERSAL") or by their string value.
+_CAPABILITY_ALIASES: dict[str, str] = {
+    name: value
+    for name, value in globals().items()
+    if name.isupper() and isinstance(value, str) and not name.startswith("_")
+}
+
+
+def _resolve_capability(token: str) -> str:
+    """Map a JSON slot token onto a known capability string."""
+    token = token.strip()
+    return _CAPABILITY_ALIASES.get(token.upper(), token.lower())
+
+
+def load_custom_chains(repo_dir: str) -> list[ChainTemplate]:
+    """Load user-defined chain templates from ``custom_chains.json`` in the repo.
+
+    The file (repo root) is a JSON array of objects with ``name``, ``slots``
+    (a list of lists of capability tokens), ``impact``, and ``narrative``. Slot
+    tokens may be capability constant names (``"PATH_TRAVERSAL"``) or their
+    string values (``"path_traversal"``). A missing or malformed file yields no
+    templates — a bad custom file must never crash threat modeling.
+    """
+    path = Path(repo_dir) / "custom_chains.json"
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    templates: list[ChainTemplate] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        slots_raw = entry.get("slots")
+        if not name or not isinstance(slots_raw, list) or not slots_raw:
+            continue
+        slots: list[tuple[str, ...]] = []
+        for slot in slots_raw:
+            options = [slot] if isinstance(slot, str) else slot
+            if not isinstance(options, list):
+                continue
+            resolved = tuple(_resolve_capability(str(o)) for o in options if str(o).strip())
+            if resolved:
+                slots.append(resolved)
+        if len(slots) < 2:
+            continue  # a chain needs at least two links
+        templates.append(
+            ChainTemplate(
+                name=str(name),
+                slots=tuple(slots),
+                impact=str(entry.get("impact", "")),
+                narrative=str(entry.get("narrative", "")),
+            )
+        )
+    return templates
+
+
 @dataclass
 class ExploitChain:
     """A matched multi-finding attack path."""
@@ -186,6 +278,44 @@ class ExploitChain:
     narrative: str
     severity: Severity
     findings: list[Finding] = field(default_factory=list)
+    # True when the first link sits on an internet-facing entry point.
+    internet_facing: bool = False
+
+    @property
+    def recommended_fix_order(self) -> list[dict]:
+        """Which link to fix first to break the chain, ranked.
+
+        Fixing any single link breaks the chain, so the cheapest, highest-
+        leverage link should go first. We rank by: internet-facing entry points
+        first (cut the attacker's entry), then higher severity, then earlier
+        position in the chain. Each entry is JSON-friendly for the API/UI.
+        """
+        ordered = sorted(
+            enumerate(self.findings),
+            key=lambda pair: (
+                not pair[1].internet_facing,          # entry points first
+                -int(pair[1].severity),               # then most severe
+                pair[0],                              # then earliest link
+            ),
+        )
+        return [
+            {
+                "rank": rank,
+                "step": idx + 1,
+                "id": f.id,
+                "location": f.location,
+                "title": f.title,
+                "severity": f.severity.label,
+                "internet_facing": f.internet_facing,
+                "reason": (
+                    "Internet-facing entry point — fixing it removes the attacker's "
+                    "unauthenticated foothold."
+                    if f.internet_facing
+                    else "Highest-severity link remaining; fixing it breaks the chain."
+                ),
+            }
+            for rank, (idx, f) in enumerate(ordered, 1)
+        ]
 
     def mermaid(self) -> str:
         """Render the chain as a Mermaid left-to-right flow graph."""
@@ -219,24 +349,44 @@ def _mermaid_label(text: str, location: str) -> str:
     return body
 
 
-def _severity_of(findings: list[Finding]) -> Severity:
-    """A chain is at least as severe as its worst link, bumped one level."""
+def _severity_of(findings: list[Finding], internet_facing: bool = False) -> Severity:
+    """A chain is at least as severe as its worst link, bumped one level.
+
+    An internet-facing entry point earns an extra bump: the chain is reachable
+    without a prior foothold, so it is materially more dangerous.
+    """
     worst = max((f.severity for f in findings), default=Severity.MEDIUM)
-    return Severity(min(int(worst) + 1, int(Severity.CRITICAL)))
+    bump = 2 if internet_facing else 1
+    return Severity(min(int(worst) + bump, int(Severity.CRITICAL)))
 
 
-def detect_exploit_chains(findings: list[Finding]) -> list[ExploitChain]:
+def detect_exploit_chains(
+    findings: list[Finding], repo_dir: str | None = None
+) -> list[ExploitChain]:
     """Match findings against the chain templates, highest-severity chains first.
 
     Each finding is tagged with the capabilities it grants; a template matches
     when every slot can be filled by a distinct finding. Within a template we
     greedily assign the highest-severity unused finding to each slot, so the
-    most dangerous instance of each capability anchors the chain.
+    most dangerous instance of each capability anchors the chain. When the
+    chain's first link sits on an internet-facing entry point, its severity is
+    bumped an extra level.
+
+    Args:
+        findings: The findings to correlate. They are tagged in place with
+            ``internet_facing``.
+        repo_dir: When given, user-defined templates from ``custom_chains.json``
+            in the repo root are appended to the built-in library.
     """
+    mark_internet_facing(findings)
     tagged = [(f, capabilities_of(f)) for f in findings]
     chains: list[ExploitChain] = []
 
-    for template in _CHAIN_TEMPLATES:
+    templates = list(_CHAIN_TEMPLATES)
+    if repo_dir:
+        templates += load_custom_chains(repo_dir)
+
+    for template in templates:
         used: set[int] = set()
         picked: list[Finding] = []
         ok = True
@@ -254,13 +404,15 @@ def detect_exploit_chains(findings: list[Finding]) -> list[ExploitChain]:
             used.add(idx)
             picked.append(chosen)
         if ok and len(picked) >= 2:
+            entry_facing = picked[0].internet_facing
             chains.append(
                 ExploitChain(
                     name=template.name,
                     impact=template.impact,
                     narrative=template.narrative,
-                    severity=_severity_of(picked),
+                    severity=_severity_of(picked, internet_facing=entry_facing),
                     findings=picked,
+                    internet_facing=entry_facing,
                 )
             )
 
@@ -284,8 +436,9 @@ def render_threat_section(chains: list[ExploitChain]) -> list[str]:
         "",
     ]
     for i, chain in enumerate(chains, 1):
+        entry = " · 🌐 internet-facing entry point" if chain.internet_facing else ""
         lines += [
-            f"### {i}. {chain.name} ({chain.severity.label})",
+            f"### {i}. {chain.name} ({chain.severity.label}){entry}",
             "",
             chain.narrative,
             "",
@@ -299,6 +452,13 @@ def render_threat_section(chains: list[ExploitChain]) -> list[str]:
             "",
         ]
         for f in chain.findings:
-            lines.append(f"- `{f.location}` — {f.title} ({f.severity.label})")
+            flag = " 🌐" if f.internet_facing else ""
+            lines.append(f"- `{f.location}` — {f.title} ({f.severity.label}){flag}")
+        lines += ["", "**Recommended fix order (break the chain):**", ""]
+        for step in chain.recommended_fix_order:
+            lines.append(
+                f"{step['rank']}. `{step['location']}` — {step['id']} "
+                f"({step['severity']}) — {step['reason']}"
+            )
         lines.append("")
     return lines

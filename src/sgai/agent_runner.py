@@ -93,7 +93,7 @@ async def run_agent_report(
         diff = memory.diff(key, findings)
         context = _memory_context(diff)
 
-    report = await narrate_findings(findings, target, memory_context=context)
+    report = await narrate_findings(findings, target, memory_context=context, repo_dir=repo)
 
     if diff is not None:
         report = report.rstrip() + "\n\n" + "\n".join(_changes_section(diff))
@@ -103,7 +103,7 @@ async def run_agent_report(
 
 
 async def narrate_findings(
-    findings: list[Finding], target: str, memory_context: str = ""
+    findings: list[Finding], target: str, memory_context: str = "", repo_dir: str | None = None
 ) -> str:
     """Run the two-agent narration pipeline over already-gathered findings.
 
@@ -116,6 +116,8 @@ async def narrate_findings(
         findings: The findings to narrate.
         target: Label for what was scanned (path, "submitted code", etc.).
         memory_context: Optional recap of prior scans, injected into the prompt.
+        repo_dir: Repo root, used to load ``custom_chains.json`` for threat
+            modeling when available.
 
     Returns:
         The agent-written Markdown report.
@@ -124,16 +126,35 @@ async def narrate_findings(
 
     # Correlate findings into exploit chains deterministically and hand the summary
     # to the triage agent so its threat-model narration is grounded, not invented.
-    chains = detect_exploit_chains(findings)
+    # The raw Mermaid graph and the recommended fix order go into the prompt too,
+    # so the agent can reference specific graph nodes and the break-the-chain
+    # ordering instead of inventing an attack path.
+    chains = detect_exploit_chains(findings, repo_dir=repo_dir)
     chain_context = ""
     if chains:
-        chain_lines = [
-            f"- {c.name} ({c.severity.label}): "
-            + " → ".join(f.location for f in c.findings)
-            + f" ⇒ {c.impact}"
-            for c in chains
-        ]
-        chain_context = "Pre-computed exploit chains:\n" + "\n".join(chain_lines) + "\n\n"
+        blocks = []
+        for c in chains:
+            entry = " [internet-facing entry point]" if c.internet_facing else ""
+            fix_order = " ; ".join(
+                f"{s['rank']}) {s['location']} ({s['id']})"
+                for s in c.recommended_fix_order
+            )
+            blocks.append(
+                f"- {c.name} ({c.severity.label}){entry}: "
+                + " → ".join(f.location for f in c.findings)
+                + f" ⇒ {c.impact}\n"
+                f"  Recommended fix order: {fix_order}\n"
+                "  Mermaid graph:\n"
+                "  ```mermaid\n"
+                + "\n".join("  " + line for line in c.mermaid().splitlines())
+                + "\n  ```"
+            )
+        chain_context = (
+            "Pre-computed exploit chains (narrate these; reference the Mermaid "
+            "node labels and the recommended fix order):\n"
+            + "\n".join(blocks)
+            + "\n\n"
+        )
 
     pipeline = build_narration_pipeline()
     runner = InMemoryRunner(agent=pipeline, app_name=_APP)

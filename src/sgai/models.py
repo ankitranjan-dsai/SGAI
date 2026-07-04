@@ -51,3 +51,6 @@ class Finding:
     # Secret findings only: how urgently the credential must be rotated
     # ("immediate", "high", "medium", "low"); None for non-secret findings.
     rotation_urgency: str | None = None
+    # True when the finding sits in an internet-facing file (an API route,
+    # handler, or entry point) — an attacker can reach it without a foothold.
+    internet_facing: bool = False

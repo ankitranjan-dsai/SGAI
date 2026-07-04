@@ -64,6 +64,7 @@ def build_markdown_report(
     findings: list[Finding],
     generated_at: datetime | None = None,
     diff: "ScanDiff | None" = None,
+    repo_dir: str | None = None,
 ) -> str:
     """Render a Markdown security report.
 
@@ -73,6 +74,8 @@ def build_markdown_report(
         generated_at: Timestamp for the report; defaults to now (UTC).
         diff: Optional change set vs. the previous recorded scan; when given, a
             "Changes since last scan" section is added.
+        repo_dir: Repo root, used to load ``custom_chains.json`` for threat
+            modeling when available.
 
     Returns:
         The full report as a Markdown string.
@@ -117,7 +120,7 @@ def build_markdown_report(
         )
 
     # Correlate findings into end-to-end attack paths, rendered as Mermaid graphs.
-    chains = detect_exploit_chains(findings)
+    chains = detect_exploit_chains(findings, repo_dir=repo_dir)
     if chains:
         lines += [""] + render_threat_section(chains)
 

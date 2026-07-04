@@ -113,7 +113,7 @@ async def run_scan(
         key = target_key(label, repo)
         diff = memory.diff(key, findings)
 
-    report = build_markdown_report(label or repo, findings, diff=diff)
+    report = build_markdown_report(label or repo, findings, diff=diff, repo_dir=repo)
 
     if memory is not None:
         memory.record(target_key(label, repo), findings)
