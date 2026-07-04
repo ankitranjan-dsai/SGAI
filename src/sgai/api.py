@@ -888,3 +888,37 @@ def undismiss(req: UndismissRequest) -> dict:
         req.target, finding_fp=req.fingerprint or None, pattern_id=req.pattern_id or None
     )
     return {"target": req.target, "removed": removed, "dismissals": memory.dismissals(req.target)}
+
+
+# --------------------------------------------------------------------------- #
+# Historical trends: GET /trends
+# --------------------------------------------------------------------------- #
+@app.get("/trends")
+def trends(target: str = "") -> dict:
+    """Time-series scan history for the trends dashboard.
+
+    With no ``target``, returns the list of tracked targets. With a ``target``,
+    returns one point per recorded snapshot: timestamp, finding count, total
+    risk score, top severity, and the per-severity breakdown — everything the
+    Chart.js dashboard needs to plot findings and risk over time.
+    """
+    from sgai.memory import ScanMemory
+
+    memory = ScanMemory()
+    if not target.strip():
+        return {"targets": memory.targets()}
+
+    points = []
+    for snap in memory.history(target):
+        by_severity: dict[str, int] = {}
+        for meta in snap.findings.values():
+            label = meta.get("severity", "Unknown")
+            by_severity[label] = by_severity.get(label, 0) + 1
+        points.append({
+            "at": snap.at,
+            "finding_count": len(snap.findings),
+            "risk_score": snap.risk_score,
+            "top_severity": snap.top_severity,
+            "by_severity": by_severity,
+        })
+    return {"target": target, "points": points}

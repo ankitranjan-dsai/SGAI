@@ -146,6 +146,7 @@
     <button class="tab active" data-tab="scan">Scan Results</button>
     <button class="tab" data-tab="play">Code Playground</button>
     <button class="tab" data-tab="chat">Interactive Agent Chat</button>
+    <button class="tab" data-tab="trends">Trends</button>
   </div>
 
   <!-- ================= SCAN RESULTS ================= -->
@@ -219,10 +220,26 @@ digest = hashlib.md5(pw.encode())</textarea>
     <p class="hint">Context: the current Playground code. Without a Gemini key the agent still answers deterministically from SGAI's local patch engine.</p>
   </section>
 
+  <!-- ================= TRENDS ================= -->
+  <section id="tab-trends" class="panel-view">
+    <p class="lead">Security posture over time, from SGAI's scan memory. Each recorded scan of a target is a point — watch findings and risk score trend as the code is fixed.</p>
+    <label for="trendTarget">Target</label>
+    <div class="chatrow">
+      <select id="trendTarget" class="url" style="flex:1"></select>
+      <button id="trendLoad" style="width:auto">Load</button>
+    </div>
+    <div id="trendStatus" class="note"></div>
+    <div id="trendChartWrap" class="mermaid-box" style="display:none">
+      <canvas id="trendChart" height="220"></canvas>
+    </div>
+    <div id="trendTable"></div>
+  </section>
+
   <footer>Powered by OSV.dev · Bandit · Semgrep · Pasted code is scanned in a throwaway temp dir and never stored.</footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const sevOrder = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
@@ -248,6 +265,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.add("active");
     $("tab-" + tab.dataset.tab).classList.add("active");
     if (tab.dataset.tab === "chat") loadChatSession();  // restore persisted transcript
+    if (tab.dataset.tab === "trends") loadTrendTargets();
   });
 });
 
@@ -739,6 +757,99 @@ async function sendChat() {
 
 $("chatSend").addEventListener("click", sendChat);
 $("chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+// ===========================================================================
+// TAB 4 — TRENDS (Chart.js time series from ScanMemory)
+// ===========================================================================
+let trendChart = null;
+
+async function loadTrendTargets() {
+  if (!guardServed($("trendStatus"))) return;
+  const sel = $("trendTarget");
+  try {
+    const resp = await fetch(API("/trends"));
+    const data = await resp.json();
+    const targets = data.targets || [];
+    const prev = sel.value;
+    sel.innerHTML = targets.length
+      ? targets.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")
+      : '<option value="">No tracked targets yet — run a scan first</option>';
+    // Prefer the currently-scanned repo if it's tracked.
+    const want = ($("ghurl").value || "").trim();
+    if (want && targets.includes(want)) sel.value = want;
+    else if (targets.includes(prev)) sel.value = prev;
+    if (sel.value) loadTrend();
+  } catch (e) {
+    $("trendStatus").innerHTML = '<div class="err">Could not load targets: ' + esc(e.message) + "</div>";
+  }
+}
+
+async function loadTrend() {
+  const target = $("trendTarget").value;
+  if (!target) return;
+  $("trendStatus").textContent = "";
+  try {
+    const resp = await fetch(API("/trends?target=" + encodeURIComponent(target)));
+    const data = await resp.json();
+    renderTrend(data.points || []);
+  } catch (e) {
+    $("trendStatus").innerHTML = '<div class="err">Could not load trend: ' + esc(e.message) + "</div>";
+  }
+}
+
+function renderTrend(points) {
+  const wrap = $("trendChartWrap"), table = $("trendTable");
+  if (!points.length) {
+    wrap.style.display = "none";
+    table.innerHTML = '<div class="empty">No recorded scans for this target yet.</div>';
+    return;
+  }
+  const labels = points.map((p) => (p.at || "").replace("T", " ").replace("+00:00", "Z"));
+  const findings = points.map((p) => p.finding_count);
+  const risk = points.map((p) => p.risk_score);
+
+  wrap.style.display = "block";
+  if (trendChart) trendChart.destroy();
+  if (window.Chart) {
+    trendChart = new Chart($("trendChart").getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label: "Findings", data: findings, borderColor: "#f97316",
+            backgroundColor: "rgba(249,115,22,.15)", tension: .25, yAxisID: "y", fill: true },
+          { label: "Risk score", data: risk, borderColor: "#38bdf8",
+            backgroundColor: "rgba(56,189,248,.10)", tension: .25, yAxisID: "y1", fill: true },
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { labels: { color: "#e2e8f0" } } },
+        scales: {
+          x: { ticks: { color: "#94a3b8", maxRotation: 45 }, grid: { color: "#334155" } },
+          y: { position: "left", title: { display: true, text: "Findings", color: "#f97316" },
+               ticks: { color: "#94a3b8" }, grid: { color: "#334155" }, beginAtZero: true },
+          y1: { position: "right", title: { display: true, text: "Risk score", color: "#38bdf8" },
+                ticks: { color: "#94a3b8" }, grid: { drawOnChartArea: false }, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  // A compact table beneath the chart for exact values + severity mix.
+  let h = '<div class="section-title">Recorded scans</div><div class="diff" style="grid-template-columns:1fr;font-size:13px">';
+  h += '<div class="side"><div class="col-head">When · findings · risk · top severity</div>';
+  points.forEach((p) => {
+    const mix = Object.entries(p.by_severity || {}).map(([s, n]) => `${s}:${n}`).join(" ");
+    h += `<div class="ln"><span>${esc(labels[points.indexOf(p)])} · ${p.finding_count} · ${p.risk_score} · ${esc(p.top_severity)}${mix ? " · " + esc(mix) : ""}</span></div>`;
+  });
+  h += "</div></div>";
+  table.innerHTML = h;
+}
+
+$("trendLoad").addEventListener("click", loadTrend);
+$("trendTarget").addEventListener("change", loadTrend);
 </script>
 </body>
 </html>
