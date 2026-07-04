@@ -12,7 +12,10 @@ import re
 
 from sgai.models import Finding
 
-_LEVEL = {"Critical": "error", "High": "error", "Medium": "warning", "Low": "note", "Unknown": "note"}
+_LEVEL = {
+    "Critical": "error", "High": "error", "Medium": "warning",
+    "Low": "note", "Info": "note", "Unknown": "note",
+}
 _FILE_LINE = re.compile(r"^(?P<file>.+):(?P<line>\d+)$")
 
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"

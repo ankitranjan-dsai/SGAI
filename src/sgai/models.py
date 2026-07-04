@@ -13,13 +13,18 @@ from enum import IntEnum
 
 
 class Severity(IntEnum):
-    """Normalized severity. Ordered so findings sort by importance."""
+    """Normalized severity. Ordered so findings sort by importance.
+
+    ``INFO`` marks findings that are real matches but carry no production risk
+    (e.g. a credential-shaped string inside a test fixture).
+    """
 
     UNKNOWN = 0
-    LOW = 1
-    MEDIUM = 2
-    HIGH = 3
-    CRITICAL = 4
+    INFO = 1
+    LOW = 2
+    MEDIUM = 3
+    HIGH = 4
+    CRITICAL = 5
 
     @property
     def label(self) -> str:
@@ -43,3 +48,6 @@ class Finding:
     # Dependency reachability: True when first-party code imports the vulnerable
     # package, False when it provably doesn't, None when not analyzed.
     reachable: bool | None = None
+    # Secret findings only: how urgently the credential must be rotated
+    # ("immediate", "high", "medium", "low"); None for non-secret findings.
+    rotation_urgency: str | None = None

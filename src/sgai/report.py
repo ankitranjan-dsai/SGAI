@@ -23,6 +23,7 @@ _SEVERITY_EMOJI = {
     Severity.HIGH: "🟠",
     Severity.MEDIUM: "🟡",
     Severity.LOW: "🔵",
+    Severity.INFO: "⚫",
     Severity.UNKNOWN: "⚪",
 }
 

@@ -31,12 +31,13 @@ _CONFIDENCE_WEIGHT = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 # Semgrep severities map onto our normalized scale.
 _SEMGREP_SEVERITY = {"ERROR": Severity.HIGH, "WARNING": Severity.MEDIUM, "INFO": Severity.LOW}
 
-# Named severities used by the container/IaC scanner.
+# Named severities used by the container/IaC and secret scanners.
 _NAMED_SEVERITY = {
     "CRITICAL": Severity.CRITICAL,
     "HIGH": Severity.HIGH,
     "MEDIUM": Severity.MEDIUM,
     "LOW": Severity.LOW,
+    "INFO": Severity.INFO,
 }
 
 # Concise remediation guidance for the Bandit tests our example surface triggers.
@@ -467,29 +468,46 @@ def findings_from_container_scan(result: dict, location_file: str) -> list[Findi
 
 
 def findings_from_secret_scan(result: dict) -> list[Finding]:
-    """Convert ``scan_secrets`` output into normalized findings (always HIGH).
+    """Convert ``scan_secrets`` output into normalized findings.
 
-    A live credential in source is directly exploitable, so leaked secrets floor
-    at HIGH regardless of which detector caught them.
+    A live credential in production source is directly exploitable, so those
+    floor at HIGH. Findings the scanner classified as test/mock/fixture context
+    arrive as INFO — real matches, but not live production secrets. Each
+    finding carries the scanner's deterministic ``rotation_urgency``.
     """
     findings: list[Finding] = []
     for r in result.get("findings", []):
         entropy = r.get("entropy")
+        urgency = r.get("rotation_urgency")
+        severity = _NAMED_SEVERITY.get((r.get("severity") or "HIGH").upper(), Severity.HIGH)
         detail = r.get("title", "Potential secret")
         if entropy is not None:
             detail += f" (masked: {r.get('match', '****')}, entropy {entropy})"
+        if r.get("is_in_test_file"):
+            detail += " Found in test/fixture context — downgraded to Info."
+        if urgency:
+            detail += f" Rotation urgency: {urgency}."
+        if severity == Severity.INFO:
+            remediation = (
+                "Appears to be test/fixture data. Confirm it is not a real credential; "
+                "if it ever was live, rotate it and replace the fixture with an "
+                "obviously fake value."
+            )
+        else:
+            remediation = (
+                "Remove the secret from source, rotate it immediately, and load it "
+                "from an environment variable or secrets manager."
+            )
         findings.append(
             Finding(
                 id=r.get("check_id", "SGAI-SECRET"),
                 source="secret",
                 title=r.get("title", "Potential leaked secret"),
-                severity=Severity.HIGH,
+                severity=severity,
                 location=f"{r.get('file', '?')}:{r.get('line', '?')}",
                 detail=detail,
-                remediation=(
-                    "Remove the secret from source, rotate it immediately, and load it "
-                    "from an environment variable or secrets manager."
-                ),
+                remediation=remediation,
+                rotation_urgency=urgency,
             )
         )
     return findings

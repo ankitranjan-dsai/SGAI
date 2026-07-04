@@ -609,12 +609,73 @@ def _looks_like_dummy(value: str) -> bool:
     return False
 
 
+def _mask_secret(value: str) -> str:
+    """Mask a secret's middle, keeping only a short prefix/suffix.
+
+    ``AKIA1234567890XYZ`` → ``AKIA**********XYZ``. Applied to every candidate
+    value before any text leaves the process — the raw secret must never reach
+    the LLM backend or the API response.
+    """
+    if len(value) <= 7:
+        return "*" * len(value)
+    return value[:4] + "*" * (len(value) - 7) + value[-3:]
+
+
+def _mask_values(line: str, values: list[str]) -> str:
+    """Replace every known candidate value appearing in ``line`` with its mask."""
+    for v in sorted(values, key=len, reverse=True):  # longest first: no partial unmasking
+        if v in line:
+            line = line.replace(v, _mask_secret(v))
+    return line
+
+
+_COMMENT_MARKER = re.compile(r"(?:#|//|/\*|\*|--)\s*\S")
+
+# Path fragments that mark a file as test/mock/fixture/example content, where a
+# credential-shaped string is almost certainly not a live secret.
+_SECRET_TEST_CONTEXT = re.compile(
+    r"(?:^|[/_\-.])(?:tests?|mocks?|fixtures?|examples?|samples?|spec)(?:[/_\-.]|$)"
+)
+
+
+def _is_secret_test_context(path: str) -> bool:
+    return bool(_SECRET_TEST_CONTEXT.search(path.lower()))
+
+
+# Provider-format tokens identify the issuer, so a leak is directly usable.
+_PROVIDER_CHECK_IDS = {check_id for check_id, _, _ in _SECRET_PATTERNS}
+
+
+def _rotation_urgency(check_id: str, entropy: float, in_test_file: bool) -> str:
+    """Deterministic rotation-urgency score for a detected secret.
+
+    * ``immediate`` — a recognizable provider token (AWS/GitHub/Stripe/…) in
+      production code: anyone holding the repo can use it right now.
+    * ``high`` — a very-high-entropy generic credential in production code.
+    * ``medium`` — other credential-shaped values in production code.
+    * ``low`` — anything inside test/mock/fixture/example files.
+    """
+    if in_test_file:
+        return "low"
+    if check_id in _PROVIDER_CHECK_IDS:
+        return "immediate"
+    if entropy >= 4.5:
+        return "high"
+    return "medium"
+
+
 def _find_secret_candidates(text: str, filename: str) -> list[dict]:
-    """Detect candidate secrets in one file's text (pre dummy-filtering)."""
+    """Detect candidate secrets in one file's text (pre dummy-filtering).
+
+    Each candidate carries the context the LLM verifier needs — variable name,
+    test-file flag, surrounding lines, and nearby comments — with every
+    candidate value already masked inside that context.
+    """
     candidates: list[dict] = []
     seen: set[tuple[int, str]] = set()
 
-    def add(check_id: str, title: str, value: str, line: int, entropy: float) -> None:
+    def add(check_id: str, title: str, value: str, line: int, entropy: float,
+            variable: str | None = None) -> None:
         key = (line, value)
         if key in seen:
             return
@@ -623,9 +684,11 @@ def _find_secret_candidates(text: str, filename: str) -> list[dict]:
         candidates.append({
             "check_id": check_id, "title": title, "file": filename, "line": line,
             "value": value, "match": masked, "entropy": round(entropy, 2),
+            "variable": variable,
         })
 
-    for lineno, raw in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for lineno, raw in enumerate(lines, 1):
         for check_id, title, pattern in _SECRET_PATTERNS:
             for m in pattern.finditer(raw):
                 token = m.group(0)
@@ -633,13 +696,29 @@ def _find_secret_candidates(text: str, filename: str) -> list[dict]:
         for m in _ASSIGN_SECRET.finditer(raw):
             value = m.group("value")
             add("generic-credential", f"Hardcoded credential in `{m.group('name')}`",
-                value, lineno, _shannon_entropy(value))
+                value, lineno, _shannon_entropy(value), variable=m.group("name"))
         for m in _QUOTED.finditer(raw):
             value = m.group("value")
             entropy = _shannon_entropy(value)
             if entropy >= 4.0 and len(value) >= 20:
                 add("high-entropy-string", "High-entropy string (possible secret)",
                     value, lineno, entropy)
+
+    # Attach masked context. All values are masked in every context line so one
+    # candidate's context can never leak a neighboring candidate's secret.
+    all_values = [c["value"] for c in candidates]
+    in_test = _is_secret_test_context(filename)
+    for c in candidates:
+        idx = c["line"] - 1
+        window = lines[max(0, idx - 2): idx + 3]
+        masked_window = [_mask_values(line, all_values) for line in window]
+        c["is_in_test_file"] = in_test
+        c["context"] = {
+            "surrounding_lines": masked_window,
+            "comments": [
+                line.strip() for line in masked_window if _COMMENT_MARKER.search(line)
+            ],
+        }
     return candidates
 
 
@@ -706,12 +785,25 @@ def scan_secrets(path: str, root: str, use_llm: bool = False) -> dict[str, Any]:
     # Stage 1 (always): drop obvious placeholders deterministically.
     real = [c for c in candidates if not _looks_like_dummy(c["value"])]
 
-    # Stage 2 (optional): LLM verification weeds out realistic-looking dummies.
+    # Stage 2 (always, deterministic): classify context before any LLM runs.
+    # Findings inside test/mock/fixture/example files are downgraded to Info,
+    # and every finding gets a rotation-urgency score.
+    for c in real:
+        c["severity"] = "INFO" if c["is_in_test_file"] else "HIGH"
+        c["rotation_urgency"] = _rotation_urgency(
+            c["check_id"], c["entropy"], c["is_in_test_file"]
+        )
+
+    # Stage 3 (optional): LLM verification weeds out realistic-looking dummies.
+    # Only production-context candidates are sent — test-file findings are
+    # already Info, so burning tokens on them buys nothing.
     if use_llm and real:
-        real = _llm_filter_dummy_secrets(real)
+        production = [c for c in real if not c["is_in_test_file"]]
+        kept = {id(c) for c in _llm_filter_dummy_secrets(production)}
+        real = [c for c in real if c["is_in_test_file"] or id(c) in kept]
 
     # Never leak the raw secret back to the caller.
-    findings = [{k: v for k, v in c.items() if k != "value"} for c in real]
+    findings = [{k: v for k, v in c.items() if k not in ("value", "context")} for c in real]
     return {"findings": findings, "count": len(findings), "scanned_files": len(files)}
 
 
@@ -734,18 +826,44 @@ def _llm_filter_dummy_secrets(
     return [c for c, keep in zip(candidates, verdicts) if keep]
 
 
+def _secret_context_block(index: int, candidate: dict) -> str:
+    """Render one candidate's rich, fully masked context for the LLM prompt.
+
+    Contains only masked material: the secret value is reduced to a prefix/
+    suffix mask, and every surrounding line has all candidate values masked, so
+    no real credential ever reaches the LLM backend.
+    """
+    ctx = candidate.get("context", {})
+    surrounding = "\n".join("    " + line for line in ctx.get("surrounding_lines", []))
+    comments = "; ".join(ctx.get("comments", [])) or "(none)"
+    return (
+        f"### Candidate {index}\n"
+        f"file_path: {candidate.get('file')}\n"
+        f"variable_name: {candidate.get('variable') or '(pattern match)'}\n"
+        f"is_in_test_file: {candidate.get('is_in_test_file', False)}\n"
+        f"detector: {candidate.get('title')} "
+        f"(entropy={candidate.get('entropy')}, length={len(candidate.get('value', ''))})\n"
+        f"masked_value: {_mask_secret(candidate.get('value', ''))}\n"
+        f"nearby_comments: {comments}\n"
+        f"surrounding_lines (masked):\n{surrounding}"
+    )
+
+
 def _gemini_secret_classifier(candidates: list[dict]) -> list[bool]:
-    """Ask the configured model which candidates are real vs. dummy secrets."""
+    """Ask the configured model which candidates are real vs. dummy secrets.
+
+    The prompt carries rich context per candidate — file path, variable name,
+    test-file flag, masked surrounding lines, and nearby comments — never the
+    raw secret value.
+    """
     from google import genai
 
-    listing = "\n".join(
-        f"{i}. name={c.get('title')} value_prefix={c['value'][:6]!r} "
-        f"length={len(c['value'])} entropy={c['entropy']}"
-        for i, c in enumerate(candidates)
-    )
+    listing = "\n\n".join(_secret_context_block(i, c) for i, c in enumerate(candidates))
     prompt = (
-        "You are a secret-scanning triage assistant. For each candidate below, decide "
-        "whether it is a REAL leaked credential or an obvious DUMMY/example/test value. "
+        "You are a secret-scanning triage assistant. Every secret value below is "
+        "MASKED (prefix + asterisks + suffix); judge from the identifier names, file "
+        "paths, comments, and surrounding code whether each candidate is a REAL "
+        "leaked credential or an obvious DUMMY/example/test value. "
         "Reply with a JSON array of booleans (true = real secret), one per candidate, "
         "in order, and nothing else.\n\n" + listing
     )

@@ -47,6 +47,7 @@ _SEVERITY_STYLE = {
     Severity.HIGH: "red",
     Severity.MEDIUM: "yellow",
     Severity.LOW: "blue",
+    Severity.INFO: "dim cyan",
     Severity.UNKNOWN: "dim",
 }
 
