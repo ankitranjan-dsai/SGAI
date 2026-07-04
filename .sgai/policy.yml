@@ -1,0 +1,14 @@
+# SGAI's own Policy-as-Code gate — dogfooded in CI (`sgai check .`).
+#
+# The `examples/` fixtures are intentionally vulnerable demo targets; SGAI
+# classifies them as non-production, so they are reported but never block a
+# merge. These rules gate SGAI's real surface: its production source and its
+# own dependency set.
+policies:
+  # No Critical finding on a production (non-test, non-example) code path.
+  no-critical-in-production:
+    enabled: true
+
+  # No leaked production credential (High+); fixture secrets rank Info.
+  no-secrets:
+    enabled: true

@@ -1,0 +1,38 @@
+name: SGAI scheduled dependency audit
+
+# Weekly sweep: when OSV.dev publishes a new CVE against a pinned dependency,
+# SGAI opens a pull request upgrading the pin to the patched version. Fixture
+# manifests under test/example directories are intentionally left alone.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # every Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # push the fix branch
+      pull-requests: write  # open the PR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install SGAI
+        run: uv sync
+
+      - name: Configure git identity
+        run: |
+          git config user.name "sgai-bot"
+          git config user.email "sgai-bot@users.noreply.github.com"
+
+      # A dated branch name keeps each weekly run independent; if no pin is
+      # vulnerable, `sgai fix` exits 0 without creating a branch or a PR.
+      - name: Audit pins and open a fix PR if needed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run sgai fix . --open-pr --branch "sgai/dependency-fixes-$(date +%Y%m%d)"

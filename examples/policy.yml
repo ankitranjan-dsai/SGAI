@@ -1,0 +1,34 @@
+# Example SGAI Policy-as-Code file.
+#
+# Copy to `.sgai/policy.yml` at your repo root; `sgai check .` (and the
+# `/scan/check` API) then exits non-zero when any rule is violated, so it can
+# gate a CI merge. When no policy file exists, the built-in default applies:
+# no Critical finding on a production (non-test, non-example) code path.
+#
+# Available rules — unknown rule ids are ignored, so a typo can't silently
+# disable the gate by replacing every rule with nothing.
+policies:
+  # Fail when any Critical finding sits on a production code path.
+  # Findings in tests/, examples/, fixtures/… never trip this rule.
+  no-critical-in-production:
+    enabled: true
+
+  # Fail when more than `max` dependency CVEs are unpatched.
+  # With `reachable_only`, count only packages your code actually imports.
+  max-unpatched-cves:
+    max: 5
+    reachable_only: true
+
+  # Fail on any finding at or above this severity (info|low|medium|high|critical).
+  fail-on-severity:
+    severity: critical
+
+  # Fail when a leaked credential is found at or above `min_severity`.
+  # Test-fixture secrets rank Info, so they pass by default.
+  no-secrets:
+    enabled: true
+    min_severity: high
+
+  # Hard ceiling on total findings of any kind.
+  max-total-findings:
+    max: 100

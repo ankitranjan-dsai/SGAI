@@ -25,3 +25,8 @@ jobs:
 
       - name: Lint (ruff)
         run: uv run ruff check .
+
+      # Dogfood: SGAI audits its own repository and blocks the build on any
+      # .sgai/policy.yml violation.
+      - name: Self-audit (sgai check on this repo)
+        run: uv run sgai check .

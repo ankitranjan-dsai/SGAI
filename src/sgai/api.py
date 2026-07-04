@@ -10,8 +10,11 @@ Run locally::
     uv run uvicorn sgai.api:app --reload
 
 Endpoints:
-    GET  /health   liveness probe
-    POST /scan     audit submitted requirements + code
+    GET  /health    liveness probe
+    POST /scan      audit submitted requirements + code
+    WS   /chat/ws   bidirectional remediation chat (SSE alternative: POST /chat)
+    …plus policy gate (/scan/check), PR differential (/scan/pr), healing,
+    SBOM/VEX export, dismissals, and trends — see the route docstrings.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -758,21 +761,17 @@ def _fallback_reply(message: str, plan, patched: str) -> tuple[str, bool]:
     )
 
 
-async def _chat_events(req: ChatRequest):
-    """Server-Sent-Events stream for the interactive remediation chat.
+async def _chat_frames(req: ChatRequest):
+    """Yield chat reply frames as dicts — transport-agnostic (SSE and WebSocket).
 
-    Frames follow the SSE wire format (``data: <json>\\n\\n``). The model reply
-    is streamed word-by-word so the UI types it out live; when a patch results,
-    a final ``done`` frame carries the updated code and diff for the playground.
+    The model reply is streamed word-by-word so the UI types it out live; when
+    a patch results, a final ``done`` frame carries the updated code and diff
+    for the playground.
     """
-
-    def sse(obj: dict) -> str:
-        return f"data: {json.dumps(obj)}\n\n"
-
     _findings, plan, patched, diff = _plan_submitted_code(req.code, req.deep)
     summary = _patch_summary(plan)
 
-    yield sse({"event": "start"})
+    yield {"event": "start"}
 
     reply = ""
     includes_patch = False
@@ -787,15 +786,21 @@ async def _chat_events(req: ChatRequest):
     # Stream the reply word-by-word for a live-typing feel.
     words = reply.split(" ")
     for i, word in enumerate(words):
-        yield sse({"event": "token", "text": word + (" " if i < len(words) - 1 else "")})
+        yield {"event": "token", "text": word + (" " if i < len(words) - 1 else "")}
 
-    yield sse({
+    yield {
         "event": "done",
         "reply": reply,
         "applied_patch": includes_patch,
         "patched": patched if includes_patch else None,
         "diff": diff if includes_patch else None,
-    })
+    }
+
+
+async def _chat_events(req: ChatRequest):
+    """The chat frames in SSE wire format (``data: <json>\\n\\n``)."""
+    async for frame in _chat_frames(req):
+        yield f"data: {json.dumps(frame)}\n\n"
 
 
 @app.post("/chat")
@@ -806,6 +811,46 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.websocket("/chat/ws")
+async def chat_ws(ws: WebSocket) -> None:
+    """Bidirectional remediation chat over a single WebSocket connection.
+
+    The client sends one JSON object per turn — ``{code, message, history?,
+    deep?}`` — and receives the same ``start`` / ``token`` / ``done`` frames as
+    ``POST /chat``. Unlike SSE, follow-ups reuse the connection: the transcript
+    accumulates server-side per connection, so each turn only needs ``code``
+    and ``message``. A client-supplied ``history`` replaces the accumulated one
+    (e.g. to resume a persisted session).
+    """
+    await ws.accept()
+    history: list[dict] = []
+    try:
+        while True:
+            try:
+                data = await ws.receive_json()
+            except ValueError:  # not JSON — tell the client and keep the socket open
+                await ws.send_json({"event": "error", "detail": "expected a JSON object"})
+                continue
+            req = ChatRequest(
+                code=str(data.get("code", "")),
+                message=str(data.get("message", "")),
+                history=data.get("history") or history,
+                deep=bool(data.get("deep", False)),
+            )
+            reply = ""
+            async for frame in _chat_frames(req):
+                if frame["event"] == "done":
+                    reply = frame.get("reply") or ""
+                await ws.send_json(frame)
+            history = [
+                *req.history,
+                {"role": "user", "content": req.message},
+                {"role": "assistant", "content": reply},
+            ]
+    except WebSocketDisconnect:
+        return
 
 
 # --------------------------------------------------------------------------- #

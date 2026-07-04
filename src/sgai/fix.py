@@ -82,11 +82,19 @@ async def resolve_patched_version(name: str, version: str, ecosystem: str = "PyP
 
 
 async def plan_fixes(repo_dir: str) -> list[Fix]:
-    """Compute the upgrade plan for vulnerable PyPI pins under ``repo_dir``."""
+    """Compute the upgrade plan for vulnerable PyPI pins under ``repo_dir``.
+
+    Manifests under test/example directories are left alone: those pins are
+    fixtures (often intentionally vulnerable), not production dependencies.
+    """
+    from sgai.risk import is_test_file
+
     root = Path(repo_dir).resolve()
     fixes: list[Fix] = []
     for manifest in sorted(root.rglob("requirements*.txt")):
         if _SKIP_DIRS & set(manifest.parts):
+            continue
+        if is_test_file(manifest.relative_to(root).as_posix()):
             continue
         for pkg in parse_manifest(manifest):
             if pkg["ecosystem"] != "PyPI":

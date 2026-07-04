@@ -19,6 +19,41 @@ curl -s localhost:8080/scan \
   -d '{"requirements": "jinja2==2.11.2\n", "code": "import os\neval(input())\n"}'
 ```
 
+## CI endpoints: policy gate and PR differential scan
+
+**`POST /scan/check`** evaluates a scan against the Policy-as-Code gate and
+returns `passed: false` with the violations when the policy fails — a CI job
+blocks the merge on that flag. A `github_url` is cloned and checked against its
+own `.sgai/policy.yml`; submitted code can carry an inline `policy` YAML
+(see [`examples/policy.yml`](../examples/policy.yml)):
+
+```bash
+curl -s localhost:8080/scan/check \
+  -H 'content-type: application/json' \
+  -d '{
+    "requirements": "PyYAML==5.3.1\n",
+    "code": "import yaml\nyaml.load(open(\"c.yml\"))\n",
+    "policy": "policies:\n  fail-on-severity:\n    severity: high\n"
+  }'
+# → {"passed": false, "violations": [...], "evaluated": [...], "finding_count": N}
+```
+
+(For a CLI equivalent in CI, `sgai check .` exits non-zero on violation — see
+the repo's own `.github/workflows/sgai-security.yml`.)
+
+**`POST /scan/pr`** scans only what a pull request changed: it diffs `base`
+against `head` (or the working tree), audits the head tree, and keeps only
+findings introduced on the changed lines. With `post: true` plus
+`owner_repo`/`pr_number` it posts the result as an inline GitHub review via
+`gh`:
+
+```bash
+curl -s localhost:8080/scan/pr \
+  -H 'content-type: application/json' \
+  -d '{"repo_dir": "/workspace/checkout", "base": "origin/main"}'
+# → {"delta_count": N, "findings": [...], "comments": [...], "body": "..."}
+```
+
 ## Build and run with Docker
 
 ```bash

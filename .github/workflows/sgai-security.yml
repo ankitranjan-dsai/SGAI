@@ -19,7 +19,9 @@ jobs:
       - name: Install SGAI
         run: uv sync
 
-      - name: Run SGAI security audit
+      # The scan surfaces every finding in the Security tab; pass/fail is
+      # decided by the policy gate below, not by the raw finding count.
+      - name: Run SGAI security audit (SARIF)
         run: uv run sgai scan . --sarif sgai.sarif
         continue-on-error: true
 
@@ -27,3 +29,8 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: sgai.sarif
+
+      # The real merge gate: .sgai/policy.yml violations fail this job and
+      # block the pull request.
+      - name: Policy gate (sgai check)
+        run: uv run sgai check .

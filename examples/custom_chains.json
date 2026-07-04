@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Config tampering → remote code execution",
+    "slots": [
+      ["PATH_TRAVERSAL"],
+      ["DESERIALIZATION", "CODE_EXEC"]
+    ],
+    "impact": "An attacker who can write a config file gets arbitrary code execution when the app loads it.",
+    "narrative": "The path-traversal flaw lets an attacker drop a crafted file where the app will read it; the unsafe deserialization (or eval) of that file then executes attacker-controlled code."
+  },
+  {
+    "name": "SQL injection → credential theft → lateral movement",
+    "slots": [
+      ["SQL_INJECTION"],
+      ["SECRET"],
+      ["INSECURE_TRANSPORT", "WEAK_CRYPTO"]
+    ],
+    "impact": "Database contents and the credentials stored alongside them are exfiltrated and reused against other systems.",
+    "narrative": "The injectable query dumps stored credentials; because they are protected by weak crypto or travel over an unverified channel, the attacker recovers them in usable form and pivots to adjacent services."
+  }
+]

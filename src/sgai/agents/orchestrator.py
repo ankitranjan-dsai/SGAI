@@ -4,9 +4,10 @@ The audit is a pipeline: scan → (dependency audit ∥ static analysis) → ris
 scoring → remediation → report. The dependency audit and static analysis are
 independent and run as a parallel fan-out; everything else is sequential.
 
-NOTE (Day 1): the structure below reflects the intended ADK composition. The
-MCPToolset binding to the security server is wired here once the agents are
-fully built out — see docs/architecture.md.
+The user-facing orchestrator (:func:`build_root_agent`) owns the pipeline as
+its sub-agent and delegates to it via ADK agent transfer; the tool-using stages
+inside the pipeline reach the security MCP server through their filtered
+toolsets — see docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -47,16 +48,25 @@ def build_pipeline() -> SequentialAgent:
 def build_root_agent() -> LlmAgent:
     """Build the user-facing orchestrator agent.
 
-    TODO: attach the security MCP server via MCPToolset and delegate to the
-    pipeline. For now this returns the orchestrator shell.
+    The orchestrator holds the audit pipeline as its sub-agent: given a target
+    repository it transfers control to ``sgai_pipeline`` (ADK auto-flow adds
+    the transfer tool), the pipeline stages call the security MCP server
+    through their least-privilege toolsets, and the pipeline's report agent
+    produces the final answer.
     """
     return LlmAgent(
         name="sgai_orchestrator",
         model=MODEL,
         description="Coordinates a multi-agent security audit of a target repository.",
         instruction=(
-            "You are SGAI. Given a target repository, run the security "
-            "audit pipeline and return the final report. Keep the user informed of "
-            "which stage is running."
+            "You are SGAI, a multi-agent security-audit coordinator. When the user "
+            "names a target repository (its absolute path is stated in the "
+            "conversation), immediately transfer control to `sgai_pipeline`, which "
+            "runs the full audit: scan → dependency audit and static analysis in "
+            "parallel → risk scoring → remediation → report. Do not audit anything "
+            "yourself and never invent findings — the pipeline's report is the "
+            "answer. If the user asks anything other than to audit a repository, "
+            "briefly explain what SGAI does and what you need (a repository path)."
         ),
+        sub_agents=[build_pipeline()],
     )

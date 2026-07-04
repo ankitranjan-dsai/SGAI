@@ -62,6 +62,11 @@ async def gather_findings(repo: str, deep: bool = False) -> list[Finding]:
             if _SKIP_DIRS & set(manifest.parts):
                 continue
             res = await server.scan_manifest(str(manifest), str(root))
+            # Tag each hit with its manifest so downstream stages know whether
+            # the pin belongs to the production dependency set or a fixture.
+            rel = manifest.relative_to(root).as_posix()
+            for entry in res.get("vulnerable", []):
+                entry["manifest"] = rel
             dep_result["vulnerable"].extend(res.get("vulnerable", []))
 
     # 2. Run static analysis: Bandit (Python) always; Semgrep (multi-language) when deep.

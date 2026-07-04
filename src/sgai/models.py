@@ -59,3 +59,7 @@ class Finding:
     # True when the finding sits in an internet-facing file (an API route,
     # handler, or entry point) — an attacker can reach it without a foothold.
     internet_facing: bool = False
+    # Dependency findings only: repo-relative path of the manifest that pins
+    # the vulnerable package (e.g. "requirements.txt"). A pin that lives only
+    # in a test/example manifest is not part of the production dependency set.
+    manifest: str = ""

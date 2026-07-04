@@ -83,7 +83,11 @@ _DEFAULT_POLICIES = [Policy("no-critical-in-production", {"enabled": True})]
 
 
 def _is_production_code(finding: Finding) -> bool:
-    """A code finding on a non-test source file (dependency findings excluded)."""
+    """True when the finding sits on a production path (not test/fixture code)."""
+    if finding.source == "dependency":
+        # A pin that lives only in a test/example manifest isn't part of the
+        # production dependency set; an untagged one is assumed production.
+        return not (finding.manifest and is_test_file(finding.manifest))
     if ":" not in finding.location:
         return False
     file = finding.location.rsplit(":", 1)[0]

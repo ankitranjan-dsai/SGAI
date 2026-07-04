@@ -17,7 +17,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from sgai.agents.narrator import build_narration_pipeline
-from sgai.agents.orchestrator import build_pipeline
+from sgai.agents.orchestrator import build_root_agent
 from sgai.memory import ScanDiff, ScanMemory, SgaiMemoryService
 from sgai.models import Finding
 from sgai.report import _changes_section
@@ -242,7 +242,11 @@ async def refine_patch_chat(
 
 
 async def run_agent_scan(repo: str) -> str:
-    """Run the multi-agent pipeline against ``repo`` and return the final report.
+    """Run the orchestrated multi-agent pipeline against ``repo``.
+
+    The root orchestrator receives the request and transfers control to the
+    audit pipeline (scanner → parallel dependency/static analysis → risk →
+    remediation → report); the report agent's output is the final response.
 
     Args:
         repo: Absolute path to the repository to audit. Used as the sandbox root
@@ -251,8 +255,7 @@ async def run_agent_scan(repo: str) -> str:
     Returns:
         The final report text produced by the pipeline's report agent.
     """
-    pipeline = build_pipeline()
-    runner = InMemoryRunner(agent=pipeline, app_name=_APP)
+    runner = InMemoryRunner(agent=build_root_agent(), app_name=_APP)
     await runner.session_service.create_session(
         app_name=_APP, user_id=_USER, session_id="scan"
     )

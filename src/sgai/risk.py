@@ -118,6 +118,7 @@ def findings_from_dependency_scan(result: dict) -> list[Finding]:
                 detail="Advisories: " + ", ".join(ids),
                 remediation=f"Upgrade {package} to a patched version; review {ids[0] if ids else 'the advisories'}.",
                 references=ids,
+                manifest=v.get("manifest", ""),
             )
         )
     return findings
@@ -151,8 +152,11 @@ _TEST_FILE_RE = re.compile(
     r"|[^/\\]*\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs))$"
 )
 # Directory segments that hold test/fixture code regardless of file naming.
+# Example/demo directories count too: code there is shipped for illustration,
+# never on a production execution path, so it must not gate a build.
 _TEST_DIR_SEGMENTS = {
     "tests", "test", "__tests__", "spec", "specs", "fixtures", "mocks", "testdata", "e2e",
+    "examples", "example", "samples", "sample", "demo", "demos",
 }
 
 
@@ -162,7 +166,8 @@ def is_test_file(path: str) -> bool:
     Purely pattern-based so it works identically across languages: Python
     (``test_*.py``, ``*_test.py``, ``conftest.py``), Go (``*_test.go``), and
     JS/TS (``*.test.ts``, ``*.spec.js``), plus any file living under a
-    conventional test directory (``tests/``, ``__tests__/``, ``fixtures/``…).
+    conventional test or example directory (``tests/``, ``fixtures/``,
+    ``examples/``…).
     """
     normalized = path.replace("\\", "/")
     if _TEST_FILE_RE.search(normalized):
@@ -415,6 +420,19 @@ def apply_reachability(findings: list[Finding], graph: dict[str, set[str]]) -> l
     for f in findings:
         if f.source != "dependency":
             continue
+        # A pin that lives only in a test/example manifest is scoped to fixture
+        # code by construction — production imports of the same module resolve
+        # against the production manifest's (different) pin, not this one.
+        if f.manifest and is_test_file(f.manifest):
+            f.reachable = True
+            f.reachability = "test_only"
+            f.severity = Severity(max(int(f.severity) - 1, int(Severity.LOW)))
+            f.confidence = "MEDIUM"
+            f.detail = (f.detail + " " if f.detail else "") + (
+                f"Reachability: pinned only by a test/example manifest ({f.manifest}) — "
+                "not part of the production dependency set."
+            )
+            continue
         ecosystem, _, rest = f.location.partition(":")
         extensions = _ECOSYSTEM_EXTENSIONS.get(ecosystem)
         if not extensions or not (extensions & languages):
@@ -519,12 +537,24 @@ def findings_from_secret_scan(result: dict) -> list[Finding]:
 def deduplicate(findings: list[Finding]) -> list[Finding]:
     """Drop duplicate findings, keeping the highest-severity instance.
 
-    Two findings are duplicates when they share an id and a location.
+    Two findings are duplicates when they share an id and a location. On a
+    severity tie, an instance pinned by a production manifest wins over one
+    pinned by a test/example manifest, so a fixture duplicate can never mask
+    a production dependency vulnerability.
     """
+
+    def _fixture_pinned(f: Finding) -> bool:
+        return bool(f.manifest) and is_test_file(f.manifest)
+
     best: dict[tuple[str, str], Finding] = {}
     for f in findings:
         key = (f.id, f.location)
-        if key not in best or f.severity > best[key].severity:
+        cur = best.get(key)
+        if (
+            cur is None
+            or f.severity > cur.severity
+            or (f.severity == cur.severity and _fixture_pinned(cur) and not _fixture_pinned(f))
+        ):
             best[key] = f
     return list(best.values())
 

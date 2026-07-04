@@ -1,4 +1,4 @@
-"""Tests for the Code Playground /heal and SSE /chat endpoints (offline).
+"""Tests for the Code Playground /heal, SSE /chat, and WS /chat/ws endpoints (offline).
 
 These exercise the deterministic paths only — no Gemini key is configured in
 tests, so the chat endpoint falls back to SGAI's local patch engine.
@@ -70,6 +70,41 @@ def test_chat_no_patchable_code():
     frames = [f for f in resp.text.split("\n\n") if f.startswith("data: ")]
     done = json.loads(frames[-1][len("data: "):])
     assert done["applied_patch"] is False
+
+
+def _ws_turn(ws, payload: dict) -> list[dict]:
+    """Send one chat turn and collect frames through the ``done`` frame."""
+    ws.send_json(payload)
+    frames = []
+    while True:
+        frame = ws.receive_json()
+        frames.append(frame)
+        if frame["event"] == "done":
+            return frames
+
+
+def test_chat_ws_streams_and_holds_history():
+    with client.websocket_connect("/chat/ws") as ws:
+        frames = _ws_turn(ws, {"code": VULN, "message": "what would you change?"})
+        kinds = [f["event"] for f in frames]
+        assert kinds[0] == "start"
+        assert kinds[-1] == "done"
+        assert any(k == "token" for k in kinds)
+
+        # Follow-up on the same connection — no new POST, no resent history.
+        frames = _ws_turn(ws, {"code": VULN, "message": "apply the fix"})
+        done = frames[-1]
+        assert done["applied_patch"] is True
+        assert "yaml.safe_load" in done["patched"]
+
+
+def test_chat_ws_rejects_non_json():
+    with client.websocket_connect("/chat/ws") as ws:
+        ws.send_text("not json")
+        assert ws.receive_json()["event"] == "error"
+        # The socket stays usable after a bad frame.
+        frames = _ws_turn(ws, {"code": "x = 1\n", "message": "apply"})
+        assert frames[-1]["applied_patch"] is False
 
 
 def test_index_serves_three_tabs():

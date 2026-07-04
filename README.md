@@ -223,8 +223,9 @@ uv run python -m sgai.mcp_server.server       # run the security MCP server stan
 ### HTTP API (deployable service)
 
 Beyond `GET /health`, `GET /`, and `POST /scan[/stream]`, the service exposes:
-`POST /commit-patch`, `POST /heal` + `POST /heal/multi`, `POST /chat` +
-`GET/POST/DELETE /chat/session`, `POST /scan/check`, `POST /scan/pr`,
+`POST /commit-patch`, `POST /heal` + `POST /heal/multi`, `POST /chat` (SSE) +
+`WS /chat/ws` (bidirectional) + `GET/POST/DELETE /chat/session`,
+`POST /scan/check`, `POST /scan/pr`,
 `GET /sbom`, `GET /vex`, `POST /dismiss` + `POST /undismiss`, and `GET /trends`.
 
 A free Gemini key (https://aistudio.google.com/apikey) is **only** needed for
@@ -308,12 +309,24 @@ Full guide (incl. wiring the optional Gemini key as a secret):
   default `--explain` path uses just two LLM calls to stay within the free tier;
   the deterministic core needs no key at all.
 
-## Future work
+## CI/CD integration
 
-- CVSS-based severity scoring for dependency findings.
-- Native SAST for more languages (beyond Bandit + Semgrep).
-- End-to-end auto-fix PRs wired into CI.
-- IDE integration (VS Code / JetBrains) over the MCP server.
+SGAI gates its own repository with the workflows in
+[`.github/workflows/`](.github/workflows) — copy them into any repo for the
+same setup:
+
+- **`ci.yml`** — tests, lint, and a dogfooded `sgai check .` self-audit.
+- **`sgai-security.yml`** — on every PR: full scan uploaded as SARIF to the
+  GitHub Security tab, then `sgai check .` as the merge gate, so a
+  `.sgai/policy.yml` violation blocks the merge.
+- **`sgai-dependency-audit.yml`** — weekly cron that re-audits every pinned
+  dependency against OSV.dev and opens an upgrade PR (`sgai fix --open-pr`)
+  when a new CVE lands.
+
+This repo's own policy lives at [`.sgai/policy.yml`](.sgai/policy.yml); an
+annotated copy ships in [`examples/policy.yml`](examples/policy.yml), and a
+custom exploit-chain template in
+[`examples/custom_chains.json`](examples/custom_chains.json).
 
 ## License
 
