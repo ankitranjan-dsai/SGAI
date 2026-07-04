@@ -5,6 +5,10 @@
 **Kaggle AI Agents: Intensive Vibe Coding Capstone — Track: Freestyle**
 
 [![CI](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ankitranjan-dsai/SGAI)](https://github.com/ankitranjan-dsai/SGAI/releases)
+[![Container](https://img.shields.io/badge/ghcr.io-sgai-blue?logo=docker&logoColor=white)](https://github.com/ankitranjan-dsai/SGAI/pkgs/container/sgai)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 | | |
 |---|---|
