@@ -59,6 +59,41 @@ and a reusable **MCP server** any agent can call.
 > multi-ecosystem dependency-manifest CVE scanning + optional Semgrep
 > multi-language static analysis under `--deep`.
 
+### Advanced suite (v3)
+
+Building on the pillars above — **zero-LLM detection** (all detection is fast,
+deterministic local analysis; the LLM only narrates, triages, and powers the
+chat copilot) and **deterministic scan diffs** (`source:id:location`
+fingerprints in a JSON `ScanMemory`) — SGAI adds:
+
+- **Self-healing v2** — `validate_patch` auto-detects and runs `pytest`,
+  `npm test`, `go test`, and `cargo test` under a strict 30 s timeout;
+  patch **confidence scoring** orders rewrites; a **binary-search rollback**
+  isolates the minimal breaking subset in `O(b·log n)` test runs.
+  `POST /commit-patch` writes a validated diff inside the sandbox.
+- **Reachability v2** — production-vs-test file classification, **transitive
+  import closure**, and a multi-language import graph (Python, JS/TS, Go, Rust).
+  Test-only imports are downgraded; production imports upgraded.
+- **Context-aware secrets** — the LLM verifier sees rich context (file, variable,
+  surrounding lines/comments) with **every secret value masked**; test/fixture
+  secrets auto-downgrade to Info; each finding gets a **rotation-urgency** score.
+- **Threat modeling v2** — user `custom_chains.json` templates, a
+  **recommended fix order** to break each chain, **internet-facing** entry-point
+  weighting, and raw Mermaid handed to the triage agent.
+- **Security copilot UI** — clickable finding cards seed a contextual chat, a
+  **Commit patch** button re-validates fixes, chat sessions persist per target,
+  and a multi-file playground shows cross-file patches.
+- **Policy-as-Code** — `.sgai/policy.yml` gates (`no-critical-in-production`,
+  `max-unpatched-cves`, …); `sgai check` exits non-zero on violation for CI.
+- **PR differential scanning** — `git diff` delta analysis reports only findings
+  **newly introduced** by a change; `POST /scan/pr` posts inline GitHub reviews.
+- **SBOM & VEX** — `GET /sbom` (CycloneDX/SPDX) and `GET /vex` (OpenVEX, mapping
+  reachability to `affected` / `not_affected` / `under_investigation`).
+- **False-positive dismissals** — `POST /dismiss` + `/undismiss`; dismissed
+  findings (by fingerprint or pattern) are auto-suppressed on future scans.
+- **Trend dashboard** — `GET /trends` and a Chart.js **Trends** tab plotting
+  findings and risk score over time from `ScanMemory`.
+
 ## Why agents?
 
 A security audit is naturally parallel and specialized. No single prompt can
@@ -170,12 +205,21 @@ uv run sgai fix . --open-pr                    # open a remediation PR (repo you
 uv run sgai heal ./path --dry-run             # preview AST-safe code patches (diff)
 uv run sgai heal ./path                        # apply patches, validated by the repo's tests
 
+uv run sgai check ./path                       # CI gate: exits non-zero on policy violation
+
 uv run sgai scan ./path --explain             # multi-agent narrated report (Gemini)
 uv run sgai history ./path                     # scan timeline (new/fixed over time)
 uv run sgai accept ./path <finding-id> --reason "tracked in JIRA-123"
 
 uv run python -m sgai.mcp_server.server       # run the security MCP server standalone
 ```
+
+### HTTP API (deployable service)
+
+Beyond `GET /health`, `GET /`, and `POST /scan[/stream]`, the service exposes:
+`POST /commit-patch`, `POST /heal` + `POST /heal/multi`, `POST /chat` +
+`GET/POST/DELETE /chat/session`, `POST /scan/check`, `POST /scan/pr`,
+`GET /sbom`, `GET /vex`, `POST /dismiss` + `POST /undismiss`, and `GET /trends`.
 
 A free Gemini key (https://aistudio.google.com/apikey) is **only** needed for
 `--explain`; the free tier's 5 req/min is enough for the lean two-agent narration.
