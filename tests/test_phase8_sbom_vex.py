@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from sgai.api import app
 from sgai.models import Finding, Severity
-from sgai.sbom import build_sbom, collect_packages, purl, to_cyclonedx, to_spdx
+from sgai.sbom import build_sbom, collect_packages, purl, to_cyclonedx
 from sgai.vex import (
     STATUS_AFFECTED,
     STATUS_NOT_AFFECTED,

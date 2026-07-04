@@ -1,6 +1,5 @@
 """Phase 5: multi-file heal, chat persistence, UI wiring (offline)."""
 
-import re
 
 from fastapi.testclient import TestClient
 
