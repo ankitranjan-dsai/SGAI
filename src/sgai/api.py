@@ -69,6 +69,66 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "sgai"}
 
 
+# --------------------------------------------------------------------------- #
+# SBOM & VEX export: GET /sbom and GET /vex
+# --------------------------------------------------------------------------- #
+def _resolve_export_target(repo_dir: str, github_url: str):
+    """Yield a context manager over a local repo dir for SBOM/VEX export."""
+    import contextlib
+
+    if repo_dir.strip():
+        root = Path(repo_dir).resolve()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"repo_dir {repo_dir!r} is not a directory")
+        return contextlib.nullcontext(str(root)), str(root)
+    if github_url.strip():
+        from sgai.github import cloned_repo
+
+        return cloned_repo(github_url.strip()), github_url.strip()
+    raise HTTPException(status_code=400, detail="provide repo_dir or github_url")
+
+
+@app.get("/sbom")
+async def sbom(repo_dir: str = "", github_url: str = "", format: str = "cyclonedx") -> dict:
+    """Export a Software Bill of Materials for a repo (CycloneDX or SPDX JSON).
+
+    Pass ``repo_dir`` (local path) or ``github_url`` (cloned), and
+    ``format=cyclonedx`` (default) or ``format=spdx``.
+    """
+    from sgai.github import CloneError
+    from sgai.sbom import build_sbom
+
+    if format.lower() not in ("cyclonedx", "spdx"):
+        raise HTTPException(status_code=400, detail="format must be cyclonedx or spdx")
+    ctx, label = _resolve_export_target(repo_dir, github_url)
+    try:
+        with ctx as root:
+            return build_sbom(str(root), fmt=format, name=label)
+    except CloneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/vex")
+async def vex(repo_dir: str = "", github_url: str = "", deep: bool = False) -> dict:
+    """Export an OpenVEX document: which known CVEs actually affect this app.
+
+    Runs the deterministic audit (including reachability) and maps each
+    dependency vulnerability to a VEX status (affected / not_affected /
+    under_investigation).
+    """
+    from sgai.github import CloneError
+    from sgai.runner import gather_findings
+    from sgai.vex import build_vex
+
+    ctx, label = _resolve_export_target(repo_dir, github_url)
+    try:
+        with ctx as root:
+            findings = await gather_findings(str(root), deep=deep)
+    except CloneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return build_vex(findings, target=label)
+
+
 @app.post("/scan", response_model=ScanResponse)
 async def scan(req: ScanRequest) -> ScanResponse:
     """Audit submitted requirements and/or source code.
