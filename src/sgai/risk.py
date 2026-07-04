@@ -423,6 +423,7 @@ def apply_reachability(findings: list[Finding], graph: dict[str, set[str]]) -> l
         candidates = _ecosystem_candidates(ecosystem, package)
         if _imports_match(ecosystem, candidates, prod_imports):
             f.reachable = True
+            f.reachability = "production"
             f.severity = Severity(min(int(f.severity) + 1, int(Severity.CRITICAL)))
             f.confidence = "HIGH"
             f.detail = (f.detail + " " if f.detail else "") + (
@@ -431,6 +432,7 @@ def apply_reachability(findings: list[Finding], graph: dict[str, set[str]]) -> l
             )
         elif _imports_match(ecosystem, candidates, test_imports):
             f.reachable = True
+            f.reachability = "test_only"
             f.severity = Severity(max(int(f.severity) - 1, int(Severity.LOW)))
             f.confidence = "MEDIUM"
             f.detail = (f.detail + " " if f.detail else "") + (
@@ -439,6 +441,7 @@ def apply_reachability(findings: list[Finding], graph: dict[str, set[str]]) -> l
             )
         else:
             f.reachable = False
+            f.reachability = "unreached"
             f.severity = Severity(max(int(f.severity) - 1, int(Severity.LOW)))
             f.confidence = "LOW"
             f.detail = (f.detail + " " if f.detail else "") + (

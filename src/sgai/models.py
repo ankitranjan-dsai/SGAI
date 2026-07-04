@@ -46,8 +46,13 @@ class Finding:
     references: list[str] = field(default_factory=list)
     risk_score: int = 0
     # Dependency reachability: True when first-party code imports the vulnerable
-    # package, False when it provably doesn't, None when not analyzed.
+    # package, False when it provably doesn't, None when not analyzed. The bool
+    # is kept for back-compat; ``reachability`` carries the finer distinction.
     reachable: bool | None = None
+    # Finer-grained reachability: "production" (imported by shipping code),
+    # "test_only" (imported only by test/fixture code), "unreached" (never
+    # imported), or None when not analyzed.
+    reachability: str | None = None
     # Secret findings only: how urgently the credential must be rotated
     # ("immediate", "high", "medium", "low"); None for non-secret findings.
     rotation_urgency: str | None = None

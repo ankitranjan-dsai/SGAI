@@ -318,12 +318,20 @@ class ExploitChain:
         ]
 
     def mermaid(self) -> str:
-        """Render the chain as a Mermaid left-to-right flow graph."""
+        """Render the chain as a Mermaid left-to-right flow graph.
+
+        Each link node is annotated with its **fix rank** (``🔧k``) from
+        :attr:`recommended_fix_order`, so the graph shows not just the attack
+        path but the order to break it — fix ``🔧1`` first.
+        """
+        fix_rank = {s["step"]: s["rank"] for s in self.recommended_fix_order}
         lines = ["graph LR", "    attacker([\"🧑‍💻 Attacker\"])"]
         prev = "attacker"
         for i, f in enumerate(self.findings):
             node = f"step{i}"
-            label = _mermaid_label(f"{i + 1}. {f.title}", f.location)
+            rank = fix_rank.get(i + 1)
+            prefix = f"🔧{rank} " if rank else ""  # digits+emoji survive sanitization
+            label = _mermaid_label(f"{prefix}{i + 1}. {f.title}", f.location)
             lines.append(f'    {node}["{label}"]')
             lines.append(f"    {prev} --> {node}")
             prev = node

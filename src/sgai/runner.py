@@ -78,6 +78,12 @@ async def gather_findings(repo: str, deep: bool = False) -> list[Finding]:
             extra += findings_from_container_scan(res, str(cfg.relative_to(root)))
     extra += findings_from_secret_scan(server.scan_secrets(".", str(root)))
 
+    # 3b. Flag dependency names that typosquat popular packages (pre-CVE
+    #     supply-chain risk; deterministic string analysis, no network).
+    from sgai.typosquat import scan_typosquats
+
+    extra += scan_typosquats(str(root))
+
     # 4. Score, de-duplicate, and rank everything together.
     findings = assess(dep_result, static_result, semgrep_result, extra=extra)
 

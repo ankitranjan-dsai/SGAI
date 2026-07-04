@@ -73,13 +73,19 @@ fingerprints in a JSON `ScanMemory`) — SGAI adds:
   `POST /commit-patch` writes a validated diff inside the sandbox.
 - **Reachability v2** — production-vs-test file classification, **transitive
   import closure**, and a multi-language import graph (Python, JS/TS, Go, Rust).
-  Test-only imports are downgraded; production imports upgraded.
+  Test-only imports are downgraded; production imports upgraded. Each finding
+  carries a tri-state `reachability` (`production` / `test_only` / `unreached`).
+- **Typosquatting detector** — flags dependency names one edit, an adjacent
+  transposition, a homoglyph, or an affix away from a popular package
+  (`requsts`, `lodahs`, `crypt0graphy`, `requests2`) — supply-chain risk caught
+  before any CVE exists. Pure string analysis, zero network.
 - **Context-aware secrets** — the LLM verifier sees rich context (file, variable,
   surrounding lines/comments) with **every secret value masked**; test/fixture
   secrets auto-downgrade to Info; each finding gets a **rotation-urgency** score.
 - **Threat modeling v2** — user `custom_chains.json` templates, a
-  **recommended fix order** to break each chain, **internet-facing** entry-point
-  weighting, and raw Mermaid handed to the triage agent.
+  **recommended fix order** to break each chain (numbered `🔧1 → 🔧2` directly
+  on the Mermaid graph), **internet-facing** entry-point weighting, and raw
+  Mermaid handed to the triage agent.
 - **Security copilot UI** — clickable finding cards seed a contextual chat, a
   **Commit patch** button re-validates fixes, chat sessions persist per target,
   and a multi-file playground shows cross-file patches.
