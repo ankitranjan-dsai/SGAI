@@ -322,6 +322,115 @@ async def scan_check(req: CheckRequest) -> CheckResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Pull-request differential scan: POST /scan/pr
+# --------------------------------------------------------------------------- #
+class PRScanRequest(BaseModel):
+    repo_dir: str = ""  # local checkout to diff (CI working copy)
+    github_url: str = ""  # or a repo URL to clone (needs history for base ref)
+    base: str = "HEAD~1"  # baseline ref to diff against
+    head: str | None = None  # head ref; None diffs against the working tree
+    deep: bool = False
+    merge_base: bool = True
+    post: bool = False  # actually post the review to GitHub
+    owner_repo: str = ""  # "owner/repo", required to post
+    pr_number: int = 0  # PR number, required to post
+
+
+class PRScanResponse(BaseModel):
+    delta_count: int
+    findings: list[FindingOut]
+    comments: list[dict]
+    body: str
+    posted: bool = False
+    review: dict | None = None
+
+
+def _pr_review_body(findings) -> str:
+    """Summary body for a PR review from the delta findings."""
+    if not findings:
+        return "✅ **SGAI**: no new security findings introduced by this change."
+    from sgai.risk import severity_counts
+
+    counts = severity_counts(findings)
+    tally = " · ".join(f"{sev.label}: {n}" for sev, n in counts.items())
+    return (
+        f"🔒 **SGAI** found **{len(findings)}** new finding(s) introduced by this change.\n\n"
+        f"{tally}\n\nInline comments mark each issue on the changed lines."
+    )
+
+
+async def _run_pr_scan(repo_dir: str, req: PRScanRequest):
+    from sgai.git_diff import GitDiffError, delta_findings, review_comments
+
+    try:
+        findings, _line_map = await delta_findings(
+            repo_dir, base=req.base, head=req.head, deep=req.deep, merge_base=req.merge_base
+        )
+    except GitDiffError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    comments = review_comments(findings)
+    body = _pr_review_body(findings)
+    posted, review = False, None
+    if req.post:
+        if not req.owner_repo or not req.pr_number:
+            raise HTTPException(status_code=400, detail="post=true requires owner_repo and pr_number")
+        from sgai.github import PRError, post_pr_review
+
+        try:
+            review = post_pr_review(req.owner_repo, req.pr_number, body, comments)
+            posted = True
+        except PRError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return PRScanResponse(
+        delta_count=len(findings),
+        findings=_findings_out_models(findings),
+        comments=comments,
+        body=body,
+        posted=posted,
+        review=review,
+    )
+
+
+def _findings_out_models(findings) -> list["FindingOut"]:
+    return [
+        FindingOut(
+            id=f.id, source=f.source, severity=f.severity.label,
+            location=f.location, title=f.title, remediation=f.remediation,
+        )
+        for f in findings
+    ]
+
+
+@app.post("/scan/pr", response_model=PRScanResponse)
+async def scan_pr(req: PRScanRequest) -> PRScanResponse:
+    """Scan only what a pull request changed and optionally post a GitHub review.
+
+    Computes the added/modified lines from ``git diff`` (base vs head or the
+    working tree), runs the deterministic audit over the head tree, and keeps
+    only the findings introduced on the changed lines. When ``post`` is set with
+    ``owner_repo``/``pr_number``, an inline review is posted via ``gh``.
+    """
+    if req.repo_dir.strip():
+        root = Path(req.repo_dir).resolve()
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"repo_dir {req.repo_dir!r} is not a directory")
+        return await _run_pr_scan(str(root), req)
+
+    if req.github_url.strip():
+        from sgai.github import CloneError, cloned_repo
+
+        try:
+            with cloned_repo(req.github_url.strip()) as repo_dir:
+                return await _run_pr_scan(str(repo_dir), req)
+        except CloneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    raise HTTPException(status_code=400, detail="provide repo_dir or github_url")
+
+
+# --------------------------------------------------------------------------- #
 # Code Playground: self-healing patch preview
 # --------------------------------------------------------------------------- #
 class HealRequest(BaseModel):

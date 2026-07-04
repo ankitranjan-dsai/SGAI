@@ -106,3 +106,52 @@ def open_pull_request(repo_dir: str, branch: str, title: str, body: str) -> str:
     run(["git", "commit", "-m", title])
     run(["git", "push", "-u", "origin", branch])
     return run(["gh", "pr", "create", "--title", title, "--body", body, "--head", branch])
+
+
+def post_pr_review(
+    owner_repo: str, pr_number: int, body: str, comments: list[dict], event: str = "COMMENT"
+) -> dict:
+    """Post a review with inline comments to a GitHub pull request via ``gh api``.
+
+    Args:
+        owner_repo: ``"owner/repo"``.
+        pr_number: The pull-request number.
+        body: The review summary body.
+        comments: Inline comments as ``{path, line, body}`` (line on the head
+            commit); mapped to the GitHub review-comment shape with
+            ``side: RIGHT``.
+        event: ``COMMENT`` (default), ``REQUEST_CHANGES``, or ``APPROVE``.
+
+    Returns:
+        The parsed GitHub API response.
+
+    Raises:
+        PRError: If the ``gh`` call fails.
+    """
+    import json
+
+    env = _gh_env()
+    payload = {
+        "body": body,
+        "event": event,
+        "comments": [
+            {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]}
+            for c in comments
+            if c.get("path") and c.get("line")
+        ],
+    }
+    proc = subprocess.run(
+        [
+            "gh", "api", "--method", "POST",
+            f"repos/{owner_repo}/pulls/{pr_number}/reviews",
+            "--input", "-",
+        ],
+        input=json.dumps(payload),
+        cwd=None, capture_output=True, text=True, env=env,
+    )
+    if proc.returncode != 0:
+        raise PRError(f"gh api review failed: {proc.stderr.strip()[:300]}")
+    try:
+        return json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return {"raw": proc.stdout[:300]}
