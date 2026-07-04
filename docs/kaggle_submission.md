@@ -8,13 +8,14 @@ Capstone**. Track: **Freestyle**. Deadline: **2026-07-07, 07:59 GMT+1**
 
 | Artifact | Limit | Status |
 |---|---|---|
-| Kaggle Writeup | ≤ 2,500 words | ⬜ draft after code freeze |
-| Public demo video (YouTube) | ≤ 5 min | ⬜ record after code freeze |
+| Kaggle Writeup | ≤ 2,500 words | ✅ drafted — [kaggle_writeup.md](kaggle_writeup.md) (~1,300 words) |
+| Public demo video (YouTube) | ≤ 5 min | ⬜ script ready — [video_script.md](video_script.md); record and upload |
 | Public code link | — | ✅ https://github.com/ankitranjan-dsai/SGAI |
 | README (setup, architecture, reproduce) | — | ✅ `README.md` |
 
-> The writeup and video script are intentionally **not finalized yet** — they
-> come after the code and docs are stable.
+Code and docs are stable (v0.1.0 tagged, container published to GHCR, CI
+green). The writeup is ready to paste into the Kaggle form once the video URL
+is added to it; the video is the one remaining artifact.
 
 ## Course concepts → where to find them
 
@@ -36,39 +37,41 @@ Only 3 are required; SGAI demonstrates 6 + Sessions & Memory.
   writes code, nobody security-reviews it); clear before/after; live demo.
 - **Technical implementation / architecture / code (50):** 7 concepts, custom
   MCP server, multi-agent ADK pipeline, deterministic core + LLM narration,
-  30 passing tests, SARIF, and two GitHub Actions workflows (a test/lint CI and
-  a security-audit workflow that uploads SARIF).
+  266 passing tests, SARIF/SBOM/VEX export, self-healing, policy-as-code CI
+  gate, and four GitHub Actions workflows (test/lint CI, a security-audit
+  workflow that uploads SARIF, a scheduled dependency-audit that opens fix
+  PRs, and a release workflow that publishes the container to GHCR).
 - **Documentation (20):** structured README + `docs/` (architecture, security,
-  mcp, deploy, demo, integrations) + an intentionally-vulnerable demo repo.
+  mcp, deploy, demo, demo_repos, integrations, kaggle_writeup, video_script)
+  + an intentionally-vulnerable demo repo.
 
 ## Reproduce in 2 minutes (what a judge runs)
 
 ```bash
 uv sync
-uv run pytest -q                                  # 30 passed
+uv run pytest -q                                  # 266 passed
 uv run sgai scan ./examples/kaggle_demo_repo      # rich report (~20+ findings)
 uv run sgai scan ./examples/kaggle_demo_repo --deep   # + Semgrep adds more
 ./run.sh                                           # web app on :8080
+docker pull ghcr.io/ankitranjan-dsai/sgai:latest  # published container, public, no auth
 ```
 
-Full walkthrough: [demo.md](demo.md).
+Full walkthrough: [demo.md](demo.md). Ten public repos to exercise every
+ecosystem: [demo_repos.md](demo_repos.md).
 
-## What to show in the video (outline only — not the final script)
+## Video
 
-1. The problem in one sentence + the hero line.
-2. Web app: **Use sample vulnerable input** → Scan → risk summary, findings,
-   fixes.
-3. CLI on `examples/kaggle_demo_repo` (deps + Bandit), then `--deep` (Semgrep).
-4. **Sessions & Memory:** scan twice → "new / fixed / still open"; `sgai history`.
-5. Architecture: multi-agent ADK + MCP server (one diagram).
-6. Deployability: Dockerfile / Cloud Run; SARIF + CI.
+Full timed shot list with exact commands: [video_script.md](video_script.md).
 
 ## Pre-submit checklist
 
-- [ ] Tests green (`uv run pytest -q`)
-- [ ] All demo commands produce non-empty output
-- [ ] No secrets committed (`.env` ignored; only `.env.example` tracked)
-- [ ] README links resolve
-- [ ] Repo is public
-- [ ] Video uploaded (public/unlisted) and linked in the writeup
-- [ ] Writeup ≤ 2,500 words, links to repo + video
+- [x] Tests green (`uv run pytest -q` — 266 passed)
+- [x] All demo commands produce non-empty output
+- [x] No secrets committed (`.env` ignored; only `.env.example` tracked)
+- [x] README links resolve
+- [x] Repo is public
+- [x] CI green on `main` and the `v0.1.0` tag
+- [x] Container image public on GHCR (verified via anonymous pull token)
+- [ ] Video recorded and uploaded (public/unlisted)
+- [ ] Video URL pasted into `kaggle_writeup.md` and the Kaggle form
+- [x] Writeup ≤ 2,500 words (~1,300), links to repo (add video link before submitting)
