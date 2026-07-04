@@ -150,7 +150,8 @@ class ScanMemory:
           "targets": {
             "<target-key>": {
               "history": [ <snapshot>, ... ],
-              "accepted": { "<fingerprint>": {"reason": str, "at": str} }
+              "accepted": { "<fingerprint>": {"reason": str, "at": str} },
+              "chat": [ {"role": str, "content": str, "at": str}, ... ]
             }
           }
         }
@@ -178,7 +179,9 @@ class ScanMemory:
         self.path.write_text(json.dumps(self._data, indent=2))
 
     def _target(self, target: str) -> dict:
-        return self._data["targets"].setdefault(target, {"history": [], "accepted": {}})
+        entry = self._data["targets"].setdefault(target, {"history": [], "accepted": {}})
+        entry.setdefault("chat", [])  # back-compat for stores written before chat existed
+        return entry
 
     # ---- queries ---------------------------------------------------------
     def history(self, target: str) -> list[Snapshot]:
@@ -266,6 +269,42 @@ class ScanMemory:
     def forget(self, target: str) -> bool:
         """Drop all history and accepted risks for a target."""
         existed = self._data["targets"].pop(target, None) is not None
+        if existed:
+            self._save()
+        return existed
+
+    # ---- chat sessions ---------------------------------------------------
+    def chat_session(self, target: str) -> list[dict]:
+        """Return the persisted chat transcript for ``target`` (may be empty)."""
+        return list(self._target(target)["chat"])
+
+    def append_chat(self, target: str, role: str, content: str) -> dict:
+        """Append one chat message to ``target``'s session and persist it."""
+        message = {"role": role, "content": content, "at": _now()}
+        self._target(target)["chat"].append(message)
+        self._save()
+        return message
+
+    def save_chat_session(self, target: str, messages: list[dict]) -> None:
+        """Replace ``target``'s persisted transcript with ``messages``.
+
+        Each message keeps its ``role``/``content``; a timestamp is stamped on
+        any that lack one so the store stays uniform.
+        """
+        self._target(target)["chat"] = [
+            {
+                "role": m.get("role", "user"),
+                "content": m.get("content", ""),
+                "at": m.get("at") or _now(),
+            }
+            for m in messages
+        ]
+        self._save()
+
+    def clear_chat(self, target: str) -> bool:
+        """Drop the persisted chat transcript for ``target``."""
+        existed = bool(self._target(target)["chat"])
+        self._target(target)["chat"] = []
         if existed:
             self._save()
         return existed

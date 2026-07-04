@@ -99,6 +99,12 @@
   .diff .blank { background: #131c2b; }
   .patchlist .card { border-left-color: var(--addln); }
   .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
+  .card.clickable { cursor: pointer; transition: border-color .12s, transform .06s; }
+  .card.clickable:hover { border-color: var(--accent); }
+  .card.clickable:active { transform: translateY(1px); }
+  .card .copilot-cue { color: var(--accent); font-size: 12px; margin-top: 8px; opacity: 0; transition: opacity .12s; }
+  .card.clickable:hover .copilot-cue, .card.clickable:focus .copilot-cue { opacity: 1; }
+  .commit-btn { background: var(--addln); color: #052235; }
 
   /* Chat */
   .chatlog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
@@ -176,7 +182,9 @@ yaml.load(raw)</textarea>
   <!-- ================= CODE PLAYGROUND ================= -->
   <section id="tab-play" class="panel-view">
     <p class="lead">Paste Python, and SGAI's self-healing engine proposes AST-safe patches — shown side by side. Every rewrite preserves behavior.</p>
-    <label for="playcode">Code to heal</label>
+    <label for="playcode">Code to heal
+      <span style="color:var(--muted);font-weight:400">— multi-file: separate files with <code class="inline"># === path/to/file.py ===</code> headers</span>
+    </label>
     <textarea id="playcode" spellcheck="false" style="min-height:150px">import subprocess, yaml, hashlib
 API_PASSWORD = "supersecret123"
 subprocess.call(user_input, shell=True)
@@ -184,12 +192,20 @@ data = yaml.load(raw)
 value = eval(expr)
 digest = hashlib.md5(pw.encode())</textarea>
     <div class="row">
+      <label class="check"><input type="checkbox" id="multiFile" /> Multi-file mode (cross-file patches)</label>
+    </div>
+    <div class="row">
       <button id="heal" style="width:auto">Heal this code</button>
       <button id="toChat" class="secondary" type="button" style="margin-top:0">Refine in chat →</button>
     </div>
+    <label for="commitRoot" style="margin-top:14px">Commit to local project root
+      <span style="color:var(--muted);font-weight:400">— optional; enables the “Commit patch” button below</span>
+    </label>
+    <input id="commitRoot" class="url" type="text" spellcheck="false" placeholder="/absolute/path/to/your/repo" />
     <div id="healStatus" class="note"></div>
     <div id="patchList" class="patchlist"></div>
     <div id="diffView"></div>
+    <div id="commitStatus" class="note"></div>
   </section>
 
   <!-- ================= AGENT CHAT ================= -->
@@ -231,6 +247,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     document.querySelectorAll(".panel-view").forEach((p) => p.classList.remove("active"));
     tab.classList.add("active");
     $("tab-" + tab.dataset.tab).classList.add("active");
+    if (tab.dataset.tab === "chat") loadChatSession();  // restore persisted transcript
   });
 });
 
@@ -361,18 +378,27 @@ function render(data) {
   html += `<div class="changes">${data.finding_count} finding${data.finding_count === 1 ? "" : "s"} across dependencies, code, containers, and secrets.</div>`;
   html += '<div class="summary">' + order.map((s) => `<span class="chip ${s}">${s}: ${counts[s]}</span>`).join("") + "</div>";
 
-  html += '<div class="section-title">Findings &amp; recommended fixes</div>';
-  data.findings.sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity]).forEach((f) => {
+  html += '<div class="section-title">Findings &amp; recommended fixes <span style="font-weight:400;text-transform:none;letter-spacing:0">— click a card to ask the copilot</span></div>';
+  const sorted = data.findings.slice().sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity]);
+  sorted.forEach((f, i) => {
     let reach = "";
     if (f.reachable === true) reach = '<span class="tag reach">reachable</span>';
     else if (f.reachable === false) reach = '<span class="tag unreach">unreached</span>';
-    html += `<div class="card ${f.severity}">
+    html += `<div class="card clickable ${f.severity}" data-finding="${i}" role="button" tabindex="0">
       <div class="meta"><span>${f.severity}</span><span>${esc(f.source)}</span><code>${esc(f.location)}</code><span>${esc(f.id)}</span>${reach}</div>
       <div class="title">${esc(f.title)}</div>
       <div class="fix"><b>Fix:</b> ${esc(f.remediation)}</div>
+      <div class="copilot-cue">💬 Ask the security copilot about this finding →</div>
     </div>`;
   });
   results.innerHTML = html;
+
+  // Wire each finding card to the contextual copilot chat.
+  results.querySelectorAll(".card.clickable").forEach((card) => {
+    const open = () => seedChatFromFinding(sorted[+card.dataset.finding]);
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  });
 
   // Threat-model diagrams + full report, appended after the cards.
   if (data.report_markdown) {
@@ -383,22 +409,84 @@ function render(data) {
   }
 }
 
+// ---- Vulnerability-contextual copilot -------------------------------------
+// Pull ±3 lines of source around a finding's line from the scanned code.
+function sourceContext(location) {
+  const m = /:(\d+)$/.exec(location || "");
+  if (!m) return "";
+  const line = parseInt(m[1], 10);
+  const lines = ($("code").value || "").split("\n");
+  if (line < 1 || line > lines.length) return "";
+  const from = Math.max(0, line - 3), to = Math.min(lines.length, line + 2);
+  return lines.slice(from, to)
+    .map((t, i) => (from + i + 1 === line ? "→ " : "  ") + (from + i + 1) + ": " + t)
+    .join("\n");
+}
+
+// Clicking a finding card opens the chat pre-seeded with the finding's details
+// and the surrounding source, then loads that code into the Playground so the
+// remediation agent can act on it directly.
+async function seedChatFromFinding(f) {
+  const ctx = sourceContext(f.location);
+  const seed =
+    `About the ${f.severity} finding **${f.id}** at \`${f.location}\` (${f.source}):\n` +
+    `“${f.title}”. Suggested fix: ${f.remediation}.` +
+    (ctx ? `\n\nSurrounding code:\n${ctx}` : "");
+  if ($("code").value.trim()) $("playcode").value = $("code").value;
+  document.querySelector('.tab[data-tab="chat"]').click();
+  await loadChatSession();  // finish restoring the transcript before we annotate it
+  addSystemNote(`Loaded context for ${f.id} at ${f.location}.`);
+  $("chatInput").value = seed;
+  $("chatInput").focus();
+}
+
 // ===========================================================================
 // TAB 2 — CODE PLAYGROUND (side-by-side patch diff)
 // ===========================================================================
+
+// Split multi-file playground input on "# === path ===" headers. Text before
+// the first header (if any) becomes submitted.py so single-file input still works.
+function parsePlaygroundFiles(text) {
+  const headerRe = /^#\s*={2,}\s*(.+?)\s*={2,}\s*$/;
+  const files = {};
+  let current = "submitted.py", buf = [];
+  const flush = () => { if (buf.length) files[current] = buf.join("\n"); buf = []; };
+  let sawHeader = false;
+  text.split("\n").forEach((line) => {
+    const m = headerRe.exec(line);
+    if (m) { flush(); current = m[1]; sawHeader = true; }
+    else buf.push(line);
+  });
+  flush();
+  // No header and only the default bucket → treat as a single file.
+  if (!sawHeader) return { "submitted.py": text };
+  return files;
+}
+
 $("heal").addEventListener("click", async () => {
   const btn = $("heal"), status = $("healStatus");
   status.textContent = ""; $("patchList").innerHTML = ""; $("diffView").innerHTML = "";
+  $("commitStatus").innerHTML = "";
   if (!guardServed(status)) return;
   btn.disabled = true; btn.textContent = "Healing…";
   try {
-    const resp = await fetch(API("/heal"), {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: $("playcode").value }),
-    });
-    if (!resp.ok) throw new Error("Server returned " + resp.status);
-    const data = await resp.json();
-    renderPatches(data);
+    if ($("multiFile").checked) {
+      const files = parsePlaygroundFiles($("playcode").value);
+      const resp = await fetch(API("/heal/multi"), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ files }),
+      });
+      if (!resp.ok) throw new Error("Server returned " + resp.status);
+      renderMultiPatches(await resp.json());
+    } else {
+      const resp = await fetch(API("/heal"), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: $("playcode").value }),
+      });
+      if (!resp.ok) throw new Error("Server returned " + resp.status);
+      const data = await resp.json();
+      renderPatches(data, "submitted.py");
+    }
   } catch (e) {
     status.innerHTML = '<div class="err">Heal failed: ' + e.message + "</div>";
   } finally {
@@ -406,12 +494,31 @@ $("heal").addEventListener("click", async () => {
   }
 });
 
+// Render per-file patches for a multi-file heal response.
+function renderMultiPatches(data) {
+  const list = $("patchList"), diffView = $("diffView");
+  if (!data.patch_count) {
+    list.innerHTML = '<div class="empty">No auto-patchable unsafe patterns found across these files.</div>';
+    diffView.innerHTML = ""; return;
+  }
+  list.innerHTML = `<div class="section-title">${data.patch_count} patch${data.patch_count === 1 ? "" : "es"} across ${data.files.length} file(s)</div>`;
+  diffView.innerHTML = "";
+  data.files.forEach((file) => {
+    if (!file.patches.length) return;
+    const block = document.createElement("div");
+    block.innerHTML = `<div class="section-title" style="margin-top:16px">📄 ${esc(file.path)}</div>` +
+      sideBySide(file.diff) + commitControls(file.path, file.diff);
+    diffView.appendChild(block);
+    wireCommit(block, file.path, file.diff);
+  });
+}
+
 $("toChat").addEventListener("click", () => {
   document.querySelector('.tab[data-tab="chat"]').click();
   $("chatInput").focus();
 });
 
-function renderPatches(data) {
+function renderPatches(data, path) {
   const list = $("patchList");
   if (!data.patches.length) {
     list.innerHTML = '<div class="empty">No auto-patchable unsafe patterns found in this code.</div>';
@@ -427,7 +534,54 @@ function renderPatches(data) {
     </div>`;
   });
   list.innerHTML = h;
-  $("diffView").innerHTML = '<div class="section-title">Side-by-side diff</div>' + sideBySide(data.diff);
+  $("diffView").innerHTML = '<div class="section-title">Side-by-side diff</div>' +
+    sideBySide(data.diff) + commitControls(path || "submitted.py", data.diff);
+  wireCommit($("diffView"), path || "submitted.py", data.diff);
+}
+
+// A "Commit patch" control that writes the diff into a local sandbox root and
+// re-runs the project's tests via POST /commit-patch.
+function commitControls(path, diff) {
+  if (!diff) return "";
+  return `<div class="row" style="margin-top:10px">
+      <button class="commit-btn commit-one" data-path="${esc(path)}" style="width:auto">Commit patch to ${esc(path)}</button>
+    </div>`;
+}
+
+function wireCommit(container, path, diff) {
+  const btn = container.querySelector(`.commit-one[data-path="${cssEscape(path)}"]`);
+  if (!btn) return;
+  btn.addEventListener("click", () => commitPatch(path, diff, btn));
+}
+
+function cssEscape(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+
+async function commitPatch(path, diff, btn) {
+  const status = $("commitStatus");
+  const root = $("commitRoot").value.trim();
+  if (!root) {
+    status.innerHTML = '<div class="err">Set a local project root above to commit patches.</div>';
+    return;
+  }
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Committing…";
+  try {
+    const resp = await fetch(API("/commit-patch"), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ root, file_path: path, diff, run_tests: true }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || ("Server returned " + resp.status));
+    const v = data.validation || {};
+    let verdict;
+    if (v.ran === false) verdict = `committed — no test suite found (${esc(v.reason || "")})`;
+    else if (v.passed) verdict = "committed ✓ — tests pass";
+    else verdict = "committed ⚠️ — tests FAILED after the patch; review before merging";
+    status.innerHTML = `<div class="changes">Wrote <code>${esc(data.file)}</code> to <code>${esc(root)}</code> — ${verdict}</div>`;
+  } catch (e) {
+    status.innerHTML = '<div class="err">Commit failed: ' + esc(e.message) + "</div>";
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 }
 
 // Parse a unified diff into an aligned two-column view.
@@ -474,6 +628,11 @@ function sideBySide(diff) {
 // ===========================================================================
 const chatHistory = [];
 
+// The chat target: the scanned repo URL when present, else the playground.
+function chatTarget() {
+  return ($("ghurl").value || "").trim() || "playground";
+}
+
 function addMsg(role, text) {
   const el = document.createElement("div");
   el.className = "msg " + role;
@@ -481,6 +640,47 @@ function addMsg(role, text) {
   $("chatlog").appendChild(el);
   $("chatlog").scrollTop = $("chatlog").scrollHeight;
   return el.querySelector(".bubble");
+}
+
+function addSystemNote(text) {
+  const el = document.createElement("div");
+  el.className = "hint";
+  el.style.margin = "6px 0";
+  el.innerHTML = "🧭 " + esc(text);
+  $("chatlog").appendChild(el);
+  $("chatlog").scrollTop = $("chatlog").scrollHeight;
+}
+
+// ---- Chat session persistence (per target, via ScanMemory) ----------------
+let chatLoadedFor = null;
+
+async function loadChatSession() {
+  if (!SERVED) return;
+  const target = chatTarget();
+  if (chatLoadedFor === target) return;  // already loaded this target's transcript
+  chatLoadedFor = target;
+  try {
+    const resp = await fetch(API("/chat/session?target=" + encodeURIComponent(target)));
+    if (!resp.ok) return;
+    const data = await resp.json();
+    chatHistory.length = 0;
+    $("chatlog").innerHTML = "";
+    (data.messages || []).forEach((m) => {
+      addMsg(m.role === "assistant" ? "assistant" : "user", m.content);
+      chatHistory.push({ role: m.role, content: m.content });
+    });
+    if (chatHistory.length) addSystemNote(`Restored ${chatHistory.length} message(s) for ${target}.`);
+  } catch (e) { /* persistence is best-effort */ }
+}
+
+async function saveChatSession() {
+  if (!SERVED) return;
+  try {
+    await fetch(API("/chat/session"), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: chatTarget(), messages: chatHistory }),
+    });
+  } catch (e) { /* best-effort */ }
 }
 
 async function sendChat() {
@@ -516,6 +716,7 @@ async function sendChat() {
         if (ev.event === "token") { full += ev.text; bubble.textContent = full; $("chatlog").scrollTop = $("chatlog").scrollHeight; }
         else if (ev.event === "done") {
           chatHistory.push({ role: "assistant", content: ev.reply || full });
+          saveChatSession();  // persist the transcript for this target
           if (ev.applied_patch && ev.patched != null) {
             $("playcode").value = ev.patched;
             const note = document.createElement("div");

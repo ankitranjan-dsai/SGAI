@@ -286,6 +286,91 @@ def _plan_submitted_code(code: str, deep: bool):
         return findings, plan, patched, diff
 
 
+class MultiHealRequest(BaseModel):
+    files: dict[str, str] = {}  # path -> source; cross-file patch planning
+    deep: bool = False
+
+
+class FilePatchOut(BaseModel):
+    path: str
+    original: str
+    patched: str
+    diff: str
+    patches: list[PatchOut]
+
+
+class MultiHealResponse(BaseModel):
+    files: list[FilePatchOut]
+    patch_count: int
+
+
+def _plan_submitted_files(files: dict[str, str], deep: bool):
+    """Plan AST-safe patches across several submitted files at once.
+
+    Every file is written into one throwaway sandbox root (paths kept inside it
+    via ``safe_resolve``), so Bandit/Semgrep see the whole set and the planner
+    can produce cross-file patches. Returns the per-file plan contents.
+    """
+    from sgai.fix import plan_code_patches
+    from sgai.mcp_server.sandbox import SandboxError, safe_resolve
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()  # resolve up front so relative_to is symlink-safe
+        originals: dict[str, str] = {}  # sandbox-relative path -> original source
+        for raw_path, source in files.items():
+            try:
+                dest = safe_resolve(str(root), raw_path)
+            except SandboxError:
+                continue  # skip paths that try to escape the sandbox
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(source)
+            originals[str(dest.relative_to(root))] = source
+
+        static_result = server.run_static_analysis(".", str(root))
+        semgrep_result = server.run_semgrep(".", str(root)) if deep else None
+        findings = assess({"vulnerable": []}, static_result, semgrep_result)
+        plan = plan_code_patches(str(root), findings)
+
+        out = []
+        for rel, original in originals.items():
+            patched = plan.new_contents.get(rel, original)
+            diff = plan.diff(rel) if rel in plan.new_contents else ""
+            file_patches = [p for p in plan.patches if p.file == rel]
+            out.append((rel, original, patched, diff, file_patches))
+        return out
+
+
+@app.post("/heal/multi", response_model=MultiHealResponse)
+def heal_multi(req: MultiHealRequest) -> MultiHealResponse:
+    """Preview cross-file self-healing patches for several submitted files.
+
+    Accepts a ``{path: source}`` map, writes them into one sandbox so the
+    static analyzers see the whole set, and returns the before/after text,
+    unified diff, and patch list per file. Nothing is executed; the files are
+    written to a throwaway temp dir and discarded.
+    """
+    planned = _plan_submitted_files(req.files, req.deep)
+    files_out = [
+        FilePatchOut(
+            path=rel,
+            original=original,
+            patched=patched,
+            diff=diff,
+            patches=[
+                PatchOut(
+                    line=p.line, rule=p.rule, description=p.description,
+                    original_line=p.original_line, patched_line=p.patched_line,
+                )
+                for p in patches
+            ],
+        )
+        for rel, original, patched, diff, patches in planned
+    ]
+    return MultiHealResponse(
+        files=files_out, patch_count=sum(len(f.patches) for f in files_out)
+    )
+
+
 @app.post("/heal", response_model=HealResponse)
 def heal(req: HealRequest) -> HealResponse:
     """Preview the self-healing patches for a submitted Python snippet.
@@ -478,3 +563,37 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chat session persistence (per target, in ScanMemory)
+# --------------------------------------------------------------------------- #
+class ChatSessionRequest(BaseModel):
+    target: str
+    messages: list[dict] = []  # [{role, content}, …]
+
+
+@app.get("/chat/session")
+def get_chat_session(target: str) -> dict:
+    """Return the persisted chat transcript for a target."""
+    from sgai.memory import ScanMemory
+
+    return {"target": target, "messages": ScanMemory().chat_session(target)}
+
+
+@app.post("/chat/session")
+def save_chat_session(req: ChatSessionRequest) -> dict:
+    """Persist a target's chat transcript so it survives across sessions."""
+    from sgai.memory import ScanMemory
+
+    memory = ScanMemory()
+    memory.save_chat_session(req.target, req.messages)
+    return {"target": req.target, "saved": len(req.messages)}
+
+
+@app.delete("/chat/session")
+def clear_chat_session(target: str) -> dict:
+    """Drop a target's persisted chat transcript."""
+    from sgai.memory import ScanMemory
+
+    return {"target": target, "cleared": ScanMemory().clear_chat(target)}
