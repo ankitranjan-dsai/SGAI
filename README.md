@@ -289,7 +289,10 @@ SGAI ships as a stateless HTTP service and a container image.
 # Local:
 uv run uvicorn sgai.api:app --host 0.0.0.0 --port 8080
 
-# Docker:
+# Docker — published image (no build needed):
+docker run -p 8080:8080 ghcr.io/ankitranjan-dsai/sgai:latest
+
+# Docker — build locally:
 docker build -t sgai . && docker run -p 8080:8080 sgai
 
 # Google Cloud Run:
@@ -305,8 +308,9 @@ Full guide (incl. wiring the optional Gemini key as a secret):
   dependency-manifest CVE scanning and, under `--deep`, optional Semgrep.
 - **Semgrep is fetched at runtime** via `uvx`; if unavailable it is skipped
   gracefully (the rest of the scan still runs).
-- **Dependency severity is a floor.** The OSV batch API returns advisory IDs
-  without CVSS, so a known CVE in a pin is treated as **High** by default.
+- **Severity enrichment costs one extra OSV fetch per unique advisory.** An
+  advisory whose record carries no CVSS vector or database label (rare; some
+  PYSEC entries) falls back to **High**.
 - **Memory matches findings by `source:id:location`.** Editing code above a
   static finding shifts its line, so it can read as one issue *fixed* and one
   *new*.
