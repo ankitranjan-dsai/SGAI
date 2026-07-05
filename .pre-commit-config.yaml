@@ -1,0 +1,16 @@
+# Run SGAI's policy gate before every commit.
+#
+#   uv tool install pre-commit   # or: pipx install pre-commit
+#   pre-commit install
+#
+# The gate evaluates .sgai/policy.yml over a full scan of the repo and blocks
+# the commit on any violation — same check as CI, caught before the push.
+repos:
+  - repo: local
+    hooks:
+      - id: sgai-check
+        name: SGAI policy gate (sgai check)
+        entry: uv run sgai check .
+        language: system
+        pass_filenames: false
+        always_run: true

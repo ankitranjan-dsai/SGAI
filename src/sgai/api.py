@@ -13,8 +13,9 @@ Endpoints:
     GET  /health    liveness probe
     POST /scan      audit submitted requirements + code
     WS   /chat/ws   bidirectional remediation chat (SSE alternative: POST /chat)
-    …plus policy gate (/scan/check), PR differential (/scan/pr), healing,
-    SBOM/VEX export, dismissals, and trends — see the route docstrings.
+    …plus policy gate (/scan/check), PR differential (/scan/pr), upgrade
+    planning (/fix/plan), healing, SBOM/VEX export, dismissals, and trends —
+    see the route docstrings.
 """
 
 from __future__ import annotations
@@ -491,6 +492,74 @@ async def scan_pr(req: PRScanRequest) -> PRScanResponse:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     raise HTTPException(status_code=400, detail="provide repo_dir or github_url")
+
+
+# --------------------------------------------------------------------------- #
+# Dependency-upgrade planning: POST /fix/plan
+# --------------------------------------------------------------------------- #
+class FixPlanRequest(BaseModel):
+    requirements: str = ""  # contents of a requirements.txt to plan against
+    github_url: str = ""  # or a public repo whose manifests are planned whole
+
+
+class FixOut(BaseModel):
+    file: str
+    package: str
+    ecosystem: str
+    old_version: str
+    new_version: str
+    auto_fixable: bool
+    command: str
+
+
+class FixPlanResponse(BaseModel):
+    fix_count: int
+    fixes: list[FixOut]
+    pr_body: str
+
+
+@app.post("/fix/plan", response_model=FixPlanResponse)
+async def fix_plan(req: FixPlanRequest) -> FixPlanResponse:
+    """Plan dependency upgrades for submitted requirements or a repo URL.
+
+    Returns the patched version per vulnerable pin plus how to apply it —
+    an in-place rewrite for requirements pins (``sgai fix --open-pr``), or the
+    ecosystem's own upgrade command for lockfiles. Planning only: the service
+    never mutates a repository.
+    """
+    from sgai.fix import build_pr_body, plan_fixes
+
+    if req.github_url.strip():
+        from sgai.github import CloneError, cloned_repo
+
+        try:
+            with cloned_repo(req.github_url.strip()) as repo_dir:
+                fixes = await plan_fixes(str(repo_dir))
+        except CloneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif req.requirements.strip():
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "requirements.txt").write_text(req.requirements)
+            fixes = await plan_fixes(tmp)
+    else:
+        raise HTTPException(status_code=400, detail="provide requirements or github_url")
+
+    return FixPlanResponse(
+        fix_count=len(fixes),
+        fixes=[
+            FixOut(
+                file=fx.file,
+                package=fx.package,
+                ecosystem=fx.ecosystem,
+                old_version=fx.old_version,
+                new_version=fx.new_version,
+                auto_fixable=fx.auto_fixable,
+                command=fx.command,
+            )
+            for fx in fixes
+        ],
+        pr_body=build_pr_body(fixes) if fixes else "",
+    )
 
 
 # --------------------------------------------------------------------------- #

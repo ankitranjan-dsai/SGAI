@@ -17,7 +17,16 @@ from pathlib import Path
 # Filenames SGAI knows how to audit, mapped from glob to parser. Lockfiles are
 # preferred (exact, pinned versions); package.json is intentionally skipped
 # because its ranges are not exact.
-MANIFEST_GLOBS = ["requirements*.txt", "package-lock.json", "go.mod", "Cargo.lock"]
+MANIFEST_GLOBS = [
+    "requirements*.txt",
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "package-lock.json",
+    "go.mod",
+    "Cargo.lock",
+]
 
 
 def _parse_requirements(text: str) -> list[dict]:
@@ -29,6 +38,83 @@ def _parse_requirements(text: str) -> list[dict]:
             continue
         name, _, version = line.partition("==")
         pkgs.append({"name": name.strip(), "version": version.strip().split()[0], "ecosystem": "PyPI"})
+    return pkgs
+
+
+# An exact PEP 508 pin: "name==1.2.3", optionally with extras and a marker.
+_PEP508_PIN = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)\s*(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9._!+]+)\s*(?:;.*)?$"
+)
+# A Poetry exact version constraint: plain "1.2.3" or "==1.2.3" (no ^ ~ > < *).
+_POETRY_EXACT = re.compile(r"^(?:==)?\s*(\d[A-Za-z0-9._!+]*)$")
+
+
+def _parse_pyproject(text: str) -> list[dict]:
+    """pyproject.toml → PyPI packages from exact ``==`` pins only.
+
+    Covers PEP 621 ``[project]`` dependencies / optional-dependencies, PEP 735
+    ``[dependency-groups]``, and Poetry's ``[tool.poetry.dependencies]``.
+    Range constraints (``>=``, ``^``, ``~``) are not auditable against OSV —
+    the resolved versions live in the lockfile, which is parsed separately.
+    """
+    data = tomllib.loads(text)
+    pkgs: list[dict] = []
+
+    def _from_pep508(reqs: object) -> None:
+        for req in reqs if isinstance(reqs, list) else []:
+            m = _PEP508_PIN.match(str(req))
+            if m:
+                pkgs.append({"name": m.group(1), "version": m.group(2), "ecosystem": "PyPI"})
+
+    project = data.get("project") or {}
+    _from_pep508(project.get("dependencies"))
+    for reqs in (project.get("optional-dependencies") or {}).values():
+        _from_pep508(reqs)
+    for reqs in (data.get("dependency-groups") or {}).values():
+        _from_pep508(reqs)
+
+    poetry = (data.get("tool") or {}).get("poetry") or {}
+    for group in [poetry, *(poetry.get("group") or {}).values()]:
+        for name, spec in (group.get("dependencies") or {}).items():
+            if name.lower() == "python":
+                continue
+            version = spec.get("version") if isinstance(spec, dict) else spec
+            m = _POETRY_EXACT.match(str(version or ""))
+            if m:
+                pkgs.append({"name": name, "version": m.group(1), "ecosystem": "PyPI"})
+    return pkgs
+
+
+def _parse_poetry_lock(text: str) -> list[dict]:
+    """poetry.lock → PyPI packages (exact resolved versions)."""
+    data = tomllib.loads(text)
+    return [
+        {"name": p["name"], "version": p["version"], "ecosystem": "PyPI"}
+        for p in data.get("package", [])
+        if p.get("name") and p.get("version")
+    ]
+
+
+def _parse_uv_lock(text: str) -> list[dict]:
+    """uv.lock → PyPI packages. Only registry entries; the local project,
+    path/git dependencies, and workspace members have no OSV identity."""
+    data = tomllib.loads(text)
+    return [
+        {"name": p["name"], "version": p["version"], "ecosystem": "PyPI"}
+        for p in data.get("package", [])
+        if p.get("name") and p.get("version") and "registry" in (p.get("source") or {})
+    ]
+
+
+def _parse_pipfile_lock(text: str) -> list[dict]:
+    """Pipfile.lock → PyPI packages from the default and develop sections."""
+    data = json.loads(text)
+    pkgs = []
+    for section in ("default", "develop"):
+        for name, spec in (data.get(section) or {}).items():
+            version = (spec or {}).get("version", "")
+            if version.startswith("=="):
+                pkgs.append({"name": name, "version": version[2:], "ecosystem": "PyPI"})
     return pkgs
 
 
@@ -87,17 +173,32 @@ def _parse_cargo_lock(text: str) -> list[dict]:
 
 
 def parse_manifest(path: Path) -> list[dict]:
-    """Parse a manifest file into a list of packages, dispatching on its name."""
+    """Parse a manifest file into a list of packages, dispatching on its name.
+
+    A malformed manifest yields no packages rather than an exception — one
+    broken file in a scanned repo must never abort the whole audit.
+    """
     name = path.name
     text = path.read_text()
-    if name.startswith("requirements") and name.endswith(".txt"):
-        return _parse_requirements(text)
-    if name == "package-lock.json":
-        return _parse_package_lock(text)
-    if name == "go.mod":
-        return _parse_go_mod(text)
-    if name == "Cargo.lock":
-        return _parse_cargo_lock(text)
+    try:
+        if name.startswith("requirements") and name.endswith(".txt"):
+            return _parse_requirements(text)
+        if name == "pyproject.toml":
+            return _parse_pyproject(text)
+        if name == "poetry.lock":
+            return _parse_poetry_lock(text)
+        if name == "uv.lock":
+            return _parse_uv_lock(text)
+        if name == "Pipfile.lock":
+            return _parse_pipfile_lock(text)
+        if name == "package-lock.json":
+            return _parse_package_lock(text)
+        if name == "go.mod":
+            return _parse_go_mod(text)
+        if name == "Cargo.lock":
+            return _parse_cargo_lock(text)
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, TypeError, AttributeError):
+        return []
     return []
 
 

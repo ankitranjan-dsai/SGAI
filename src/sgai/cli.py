@@ -60,9 +60,35 @@ def _audit(
     deep: bool,
     sarif: str | None,
     remember: bool,
+    agentic: bool = False,
 ) -> int:
     """Audit a local directory and write the report. Shared by path and URL scans."""
     console.print(f"[bold]SGAI[/bold] auditing [cyan]{label}[/cyan] …")
+    if agentic:
+        # Fully autonomous mode: the orchestrator delegates to the 6-agent
+        # pipeline and every tool action goes through the security MCP server.
+        # Needs real LLM quota (each stage makes its own calls), so it is
+        # opt-in; the default paths stay within the free tier.
+        from sgai.agent_runner import llm_available, run_agent_scan
+
+        if not llm_available():
+            console.print(
+                "[red]error:[/red] --agentic needs a model key "
+                "(set GOOGLE_API_KEY or GEMINI_API_KEY)."
+            )
+            return 1
+        console.print(
+            "[dim]Fully autonomous mode: orchestrator → scanner → parallel "
+            "dependency/static analysis → risk → remediation → report …[/dim]"
+        )
+        report = asyncio.run(run_agent_scan(repo_dir))
+        Path(output).write_text(report)
+        console.print(f"Report written to [bold]{output}[/bold]")
+        console.print(
+            "[dim]Note: agentic mode reports what the agents found; run a plain "
+            "`sgai scan` for SARIF export and scan memory.[/dim]"
+        )
+        return 0
     if deep:
         console.print("[dim]Deep mode: running Semgrep multi-language analysis …[/dim]")
     memory = ScanMemory() if remember else None
@@ -104,7 +130,13 @@ def _audit(
 
 
 def _scan(
-    path: str, output: str, explain: bool, deep: bool, sarif: str | None, remember: bool
+    path: str,
+    output: str,
+    explain: bool,
+    deep: bool,
+    sarif: str | None,
+    remember: bool,
+    agentic: bool = False,
 ) -> int:
     from sgai.github import CloneError, cloned_repo, is_remote
 
@@ -113,7 +145,9 @@ def _scan(
         try:
             with cloned_repo(path) as repo_dir:
                 console.print(f"[dim]Cloned {path}[/dim]")
-                return _audit(str(repo_dir), path, output, explain, deep, sarif, remember)
+                return _audit(
+                    str(repo_dir), path, output, explain, deep, sarif, remember, agentic
+                )
         except CloneError as exc:
             console.print(f"[red]error:[/red] {exc}")
             return 1
@@ -123,7 +157,7 @@ def _scan(
     if not target.is_dir():
         console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
         return 1
-    return _audit(str(target), str(target), output, explain, deep, sarif, remember)
+    return _audit(str(target), str(target), output, explain, deep, sarif, remember, agentic)
 
 
 def _history(path: str) -> int:
@@ -187,15 +221,24 @@ def _fix(path: str, open_pr: bool, branch: str) -> int:
     def _plan_and_show(repo_dir: str) -> list:
         fixes = asyncio.run(plan_fixes(repo_dir))
         if not fixes:
-            console.print("[green]✓ No vulnerable PyPI pins to upgrade.[/green]")
+            console.print("[green]✓ No vulnerable pins to upgrade.[/green]")
             return fixes
         table = Table(title=f"{len(fixes)} dependency upgrade(s)")
         table.add_column("Package")
+        table.add_column("Ecosystem")
+        table.add_column("File")
         table.add_column("From")
         table.add_column("To", style="green")
         for fx in fixes:
-            table.add_row(fx.package, fx.old_version, fx.new_version)
+            table.add_row(fx.package, fx.ecosystem, fx.file, fx.old_version, fx.new_version)
         console.print(table)
+        manual = [fx for fx in fixes if not fx.auto_fixable]
+        if manual:
+            console.print(
+                "[bold]Lockfile upgrades[/bold] (regenerate with the ecosystem's own tool):"
+            )
+            for fx in manual:
+                console.print(f"  [cyan]$[/cyan] {fx.command}")
         return fixes
 
     # Remote URL: dry-run only (can't push to a repo you don't own).
@@ -223,6 +266,15 @@ def _fix(path: str, open_pr: bool, branch: str) -> int:
     if not open_pr:
         console.print("\n[bold]PR preview[/bold]:\n" + build_pr_body(fixes))
         console.print("\n[dim]Dry run — re-run with --open-pr to open the pull request.[/dim]")
+        return 0
+
+    if not any(fx.auto_fixable for fx in fixes):
+        # Only lockfile fixes: nothing SGAI can rewrite, so there is nothing to
+        # commit — the commands above are the remediation.
+        console.print(
+            "[yellow]All fixes are lockfile upgrades — run the commands above, "
+            "then commit the regenerated lockfiles.[/yellow]"
+        )
         return 0
 
     apply_fixes(str(target), fixes)
@@ -338,6 +390,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Use the multi-agent narration layer (Gemini) to write the report.",
     )
     scan.add_argument(
+        "--agentic",
+        action="store_true",
+        help=(
+            "Fully autonomous mode: the orchestrator delegates to the 6-agent "
+            "pipeline, which does its own scanning through the security MCP "
+            "server. Needs a Gemini key with quota headroom (paid tier "
+            "recommended); overrides --explain."
+        ),
+    )
+    scan.add_argument(
         "--deep",
         action="store_true",
         help="Also run Semgrep multi-language static analysis (JS, Go, Java, …).",
@@ -391,7 +453,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "scan":
         return _scan(
-            args.path, args.output, args.explain, args.deep, args.sarif, not args.no_memory
+            args.path,
+            args.output,
+            args.explain,
+            args.deep,
+            args.sarif,
+            not args.no_memory,
+            args.agentic,
         )
     if args.command == "history":
         return _history(args.path)

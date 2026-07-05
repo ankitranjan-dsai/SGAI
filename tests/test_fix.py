@@ -27,3 +27,30 @@ def test_build_pr_body_lists_upgrades():
     assert "automated dependency security fixes" in body
     assert "`jinja2`" in body
     assert "2.11.2" in body and "3.1.6" in body
+
+
+def test_lockfile_fixes_are_commands_not_rewrites(tmp_path):
+    lock = tmp_path / "package-lock.json"
+    original = '{"packages": {"node_modules/lodash": {"version": "4.17.11"}}}'
+    lock.write_text(original)
+
+    fixes = [
+        Fix(file="package-lock.json", package="lodash", ecosystem="npm",
+            old_version="4.17.11", new_version="4.17.21"),
+        Fix(file="go.mod", package="github.com/x/y", ecosystem="Go",
+            old_version="1.0.0", new_version="1.2.0"),
+        Fix(file="uv.lock", package="idna", ecosystem="PyPI",
+            old_version="2.7", new_version="3.7"),
+    ]
+    assert all(not fx.auto_fixable for fx in fixes)
+    assert fixes[0].command == "npm install lodash@4.17.21"
+    assert fixes[1].command == "go get github.com/x/y@v1.2.0 && go mod tidy"
+    assert fixes[2].command == "uv lock --upgrade-package idna"
+
+    # apply_fixes must never touch a lockfile.
+    apply_fixes(str(tmp_path), fixes)
+    assert lock.read_text() == original
+
+    body = build_pr_body(fixes)
+    assert "npm install lodash@4.17.21" in body
+    assert "Lockfile upgrades" in body

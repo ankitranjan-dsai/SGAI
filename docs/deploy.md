@@ -41,6 +41,18 @@ curl -s localhost:8080/scan/check \
 (For a CLI equivalent in CI, `sgai check .` exits non-zero on violation — see
 the repo's own `.github/workflows/sgai-security.yml`.)
 
+**`POST /fix/plan`** plans dependency upgrades without touching anything:
+patched versions per vulnerable pin, resolved from OSV.dev, plus how to apply
+each one (in-place rewrite for requirements pins, the ecosystem's own upgrade
+command for lockfiles):
+
+```bash
+curl -s localhost:8080/fix/plan \
+  -H 'content-type: application/json' \
+  -d '{"requirements": "jinja2==2.11.2\n"}'
+# → {"fix_count": 1, "fixes": [{"package": "jinja2", "new_version": "3.1.6", ...}], "pr_body": "..."}
+```
+
 **`POST /scan/pr`** scans only what a pull request changed: it diffs `base`
 against `head` (or the working tree), audits the head tree, and keeps only
 findings introduced on the changed lines. With `post: true` plus

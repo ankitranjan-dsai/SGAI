@@ -1168,8 +1168,31 @@ def read_source_file(path: str, root: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    """Entry point: run the MCP server over stdio."""
-    mcp.run()
+    """Entry point: run the MCP server over stdio (default) or the network.
+
+    ``--transport sse`` / ``--transport streamable-http`` turn the toolbox into
+    an independent network service that multiple IDE clients or remote agents
+    can share, instead of each client spawning its own stdio subprocess.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="sgai-mcp", description="SGAI security MCP server."
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="Transport to serve on (default: stdio).",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host for network transports.")
+    parser.add_argument("--port", type=int, default=8765, help="Bind port for network transports.")
+    args = parser.parse_args()
+
+    if args.transport != "stdio":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

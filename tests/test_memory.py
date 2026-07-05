@@ -48,6 +48,38 @@ def test_diff_detects_new_resolved_and_persisting(mem):
     assert diff.has_changes
 
 
+def test_diff_tolerates_line_shift_for_static_findings(mem):
+    # A Bandit finding at line 10; then two lines are added above it.
+    mem.record("repo", [_f("B602", "app.py:10", source="static")])
+    diff = mem.diff("repo", [_f("B602", "app.py:12", source="static")])
+
+    assert diff.new == [] and diff.resolved == []
+    assert {f.location for f in diff.persisting} == {"app.py:12"}
+
+
+def test_diff_line_shift_pairs_consume_one_to_one(mem):
+    # Two same-id findings in one file; only one survives the edit.
+    mem.record(
+        "repo",
+        [_f("B307", "app.py:5", source="static"), _f("B307", "app.py:20", source="static")],
+    )
+    diff = mem.diff("repo", [_f("B307", "app.py:7", source="static")])
+
+    assert diff.new == []
+    assert len(diff.persisting) == 1  # the moved one
+    assert len(diff.resolved) == 1  # the genuinely removed one
+
+
+def test_diff_dependency_upgrade_still_reads_as_resolved(mem):
+    # Dependency locations have no :line suffix — an upgrade is a real change,
+    # not a line shift, and must keep reading as resolved + new.
+    mem.record("repo", [_f("CVE-1", "PyPI:jinja2@2.11.2")])
+    diff = mem.diff("repo", [_f("CVE-1", "PyPI:jinja2@3.0.0")])
+
+    assert {m["location"] for m in diff.resolved} == {"PyPI:jinja2@2.11.2"}
+    assert {f.location for f in diff.new} == {"PyPI:jinja2@3.0.0"}
+
+
 def test_accepted_risk_is_not_reported_as_new(mem):
     base = [_f("CVE-0", "PyPI:base@1")]
     mem.record("repo", base)  # baseline that does NOT contain CVE-1

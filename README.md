@@ -30,7 +30,9 @@ nobody can answer "is this getting better or worse since last week?"
 
 SGAI points a team of specialist agents at any repository — a local path or a
 GitHub URL. They audit dependency manifests across **PyPI, npm, Go, and
-crates.io** against the live [OSV.dev](https://osv.dev) database, run **Bandit**
+crates.io** (requirements, `pyproject.toml`, `poetry.lock`, `uv.lock`,
+`Pipfile.lock`, `package-lock.json`, `go.mod`, `Cargo.lock`) against the live
+[OSV.dev](https://osv.dev) database, run **Bandit**
 static analysis on Python (and optional **Semgrep** multi-language analysis with
 `--deep`), de-duplicate and risk-rank the findings, write a remediation-ready
 report, and can preview dependency fixes — and optionally open a remediation PR
@@ -223,6 +225,9 @@ uv run sgai heal ./path                        # apply patches, validated by the
 uv run sgai check ./path                       # CI gate: exits non-zero on policy violation
 
 uv run sgai scan ./path --explain             # multi-agent narrated report (Gemini)
+uv run sgai scan ./path --agentic             # fully autonomous: orchestrator + 6-agent
+                                              #   pipeline doing its own MCP tool calls
+                                              #   (needs Gemini quota headroom)
 uv run sgai history ./path                     # scan timeline (new/fixed over time)
 uv run sgai accept ./path <finding-id> --reason "tracked in JIRA-123"
 
@@ -234,7 +239,7 @@ uv run python -m sgai.mcp_server.server       # run the security MCP server stan
 Beyond `GET /health`, `GET /`, and `POST /scan[/stream]`, the service exposes:
 `POST /commit-patch`, `POST /heal` + `POST /heal/multi`, `POST /chat` (SSE) +
 `WS /chat/ws` (bidirectional) + `GET/POST/DELETE /chat/session`,
-`POST /scan/check`, `POST /scan/pr`,
+`POST /scan/check`, `POST /scan/pr`, `POST /fix/plan`,
 `GET /sbom`, `GET /vex`, `POST /dismiss` + `POST /undismiss`, and `GET /trends`.
 
 A free Gemini key (https://aistudio.google.com/apikey) is **only** needed for
@@ -315,9 +320,10 @@ Full guide (incl. wiring the optional Gemini key as a secret):
 - **Severity enrichment costs one extra OSV fetch per unique advisory.** An
   advisory whose record carries no CVSS vector or database label (rare; some
   PYSEC entries) falls back to **High**.
-- **Memory matches findings by `source:id:location`.** Editing code above a
-  static finding shifts its line, so it can read as one issue *fixed* and one
-  *new*.
+- **Memory matches findings by `source:id:location`, with line-shift
+  tolerance.** A static finding whose line moved (code edited above it) is
+  recognized as the same issue; a same-id finding that moves *files* still
+  reads as one fixed and one new.
 - **Fully-autonomous tool-calling pipeline needs higher Gemini quota.** The
   default `--explain` path uses just two LLM calls to stay within the free tier;
   the deterministic core needs no key at all.

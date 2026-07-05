@@ -66,6 +66,17 @@
   .chip.High { background: var(--high); } .chip.Critical { background: var(--crit); color: #fff; }
   .chip.Medium { background: var(--med); } .chip.Low { background: var(--low); }
   .chip.Unknown { background: var(--muted); }
+  .chip.filter { cursor: pointer; opacity: .45; user-select: none; }
+  .chip.filter.active { opacity: 1; outline: 2px solid var(--text); outline-offset: 1px; }
+  .filterbar { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
+  .filterbar input { flex: 1; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .mdreport { font-size: 13px; line-height: 1.55; color: var(--text); }
+  .mdreport h1, .mdreport h2, .mdreport h3 { margin: 14px 0 6px; }
+  .mdreport table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+  .mdreport th, .mdreport td { border: 1px solid var(--border); padding: 4px 8px; }
+  .mdreport code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; }
+  .mdreport pre code { display: block; padding: 8px; overflow-x: auto; }
   .card { background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
     border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
   .card.High { border-left-color: var(--high); } .card.Critical { border-left-color: var(--crit); }
@@ -240,6 +251,8 @@ digest = hashlib.md5(pw.encode())</textarea>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const sevOrder = { Critical: 4, High: 3, Medium: 2, Low: 1, Unknown: 0 };
@@ -394,7 +407,12 @@ function render(data) {
   let html = changesSection(data.changes);
   html += '<div class="section-title">Risk summary</div>';
   html += `<div class="changes">${data.finding_count} finding${data.finding_count === 1 ? "" : "s"} across dependencies, code, containers, and secrets.</div>`;
-  html += '<div class="summary">' + order.map((s) => `<span class="chip ${s}">${s}: ${counts[s]}</span>`).join("") + "</div>";
+  html += '<div class="summary">' + order.map((s) =>
+    `<span class="chip ${s} filter" data-sev="${s}" role="button" tabindex="0" title="Toggle ${s} findings">${s}: ${counts[s]}</span>`
+  ).join("") + "</div>";
+  html += '<div class="filterbar"><input id="findSearch" type="search" placeholder="Search findings — package, file, rule id…" />'
+    + '<button id="planFixes" class="secondary" type="button" style="width:auto;margin:0">Preview dependency upgrades</button></div>'
+    + '<div id="fixPlan"></div>';
 
   html += '<div class="section-title">Findings &amp; recommended fixes <span style="font-weight:400;text-transform:none;letter-spacing:0">— click a card to ask the copilot</span></div>';
   const sorted = data.findings.slice().sort((a, b) => sevOrder[b.severity] - sevOrder[a.severity]);
@@ -402,7 +420,8 @@ function render(data) {
     let reach = "";
     if (f.reachable === true) reach = '<span class="tag reach">reachable</span>';
     else if (f.reachable === false) reach = '<span class="tag unreach">unreached</span>';
-    html += `<div class="card clickable ${f.severity}" data-finding="${i}" role="button" tabindex="0">
+    const hay = esc(`${f.id} ${f.location} ${f.title} ${f.source}`.toLowerCase());
+    html += `<div class="card clickable ${f.severity}" data-finding="${i}" data-sev="${f.severity}" data-text="${hay}" role="button" tabindex="0">
       <div class="meta"><span>${f.severity}</span><span>${esc(f.source)}</span><code>${esc(f.location)}</code><span>${esc(f.id)}</span>${reach}</div>
       <div class="title">${esc(f.title)}</div>
       <div class="fix"><b>Fix:</b> ${esc(f.remediation)}</div>
@@ -418,12 +437,74 @@ function render(data) {
     card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
   });
 
+  // Severity chips toggle a filter; the search box narrows by substring.
+  const applyFilters = () => {
+    const q = ($("findSearch").value || "").toLowerCase();
+    const active = new Set(
+      [...results.querySelectorAll(".chip.filter.active")].map((c) => c.dataset.sev)
+    );
+    results.querySelectorAll(".card.clickable").forEach((card) => {
+      const sevOK = !active.size || active.has(card.dataset.sev);
+      const textOK = !q || card.dataset.text.includes(q);
+      card.style.display = sevOK && textOK ? "" : "none";
+    });
+  };
+  results.querySelectorAll(".chip.filter").forEach((chip) => {
+    const toggle = () => { chip.classList.toggle("active"); applyFilters(); };
+    chip.addEventListener("click", toggle);
+    chip.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+  });
+  $("findSearch").addEventListener("input", applyFilters);
+  $("planFixes").addEventListener("click", planFixes);
+
   // Threat-model diagrams + full report, appended after the cards.
   if (data.report_markdown) {
     renderMermaid(data.report_markdown, results);
     const det = document.createElement("details");
-    det.innerHTML = `<summary>Full report (Markdown)</summary><pre>${esc(data.report_markdown)}</pre>`;
+    det.innerHTML = `<summary>Full report</summary>${mdToHtml(data.report_markdown)}`;
     results.appendChild(det);
+  }
+}
+
+// Markdown → sanitized HTML for the narrative report; <pre> fallback when the
+// CDN libraries are unavailable (e.g. opened from file://).
+function mdToHtml(md) {
+  if (window.marked && window.DOMPurify) {
+    return '<div class="mdreport">' + DOMPurify.sanitize(marked.parse(md)) + "</div>";
+  }
+  return `<pre>${esc(md)}</pre>`;
+}
+
+// Ask the backend for the dependency-upgrade plan matching the current input
+// (pasted requirements or a repo URL) and show it inline.
+async function planFixes() {
+  const box = $("fixPlan");
+  const payload = { requirements: $("reqs").value, github_url: $("ghurl").value.trim() };
+  if (!payload.requirements.trim() && !payload.github_url) {
+    box.innerHTML = '<p class="note">Paste requirements or set a repo URL first.</p>';
+    return;
+  }
+  box.innerHTML = '<p class="note">Resolving patched versions from OSV.dev …</p>';
+  try {
+    const resp = await fetch(API("/fix/plan"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    if (!data.fix_count) {
+      box.innerHTML = '<p class="note">✓ No vulnerable pins with a known patched version.</p>';
+      return;
+    }
+    let html = '<div class="section-title">Proposed upgrades</div><div class="mdreport"><table><tr><th>Package</th><th>File</th><th>From</th><th>To</th><th>Apply</th></tr>';
+    data.fixes.forEach((fx) => {
+      html += `<tr><td><code>${esc(fx.package)}</code></td><td>${esc(fx.file)}</td><td>${esc(fx.old_version)}</td><td>${esc(fx.new_version)}</td><td><code>${esc(fx.auto_fixable ? "sgai fix . --open-pr" : fx.command)}</code></td></tr>`;
+    });
+    html += '</table></div><p class="note">Run <code class="inline">sgai fix &lt;repo&gt; --open-pr</code> locally to turn this plan into a pull request.</p>';
+    box.innerHTML = html;
+  } catch (err) {
+    box.innerHTML = `<p class="err">Fix planning failed: ${esc(err.message || err)}</p>`;
   }
 }
 

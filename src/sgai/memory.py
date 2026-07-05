@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,20 @@ def fingerprint(finding: Finding) -> str:
     being resolved.
     """
     return f"{finding.source}:{finding.id}:{finding.location}"
+
+
+_LINE_SUFFIX = re.compile(r":\d+$")
+
+
+def _loose_key(source: str, finding_id: str, location: str) -> str:
+    """The fingerprint minus a trailing line number.
+
+    Editing code above a static finding shifts its line, changing the exact
+    fingerprint even though it is the same issue. Matching leftover new/resolved
+    pairs on this looser key (source + id + file) recognizes the move. Locations
+    without a ``:<line>`` suffix (dependency findings) keep their full identity,
+    so an upgrade still reads as resolved."""
+    return f"{source}:{finding_id}:{_LINE_SUFFIX.sub('', location)}"
 
 
 def _now() -> str:
@@ -232,6 +247,25 @@ class ScanMemory:
             if previous
             else []
         )
+
+        # Line-shift tolerance: pair leftover new/resolved entries that agree on
+        # everything but the line number — the code above the finding moved, the
+        # issue didn't. Each pair collapses into one persisting finding.
+        if new and resolved:
+            leftover: dict[str, list[dict]] = {}
+            for meta in resolved:
+                key = _loose_key(meta["source"], meta["id"], meta["location"])
+                leftover.setdefault(key, []).append(meta)
+            still_new = []
+            for f in new:
+                bucket = leftover.get(_loose_key(f.source, f.id, f.location))
+                if bucket:
+                    bucket.pop()  # consume one moved counterpart per new finding
+                    persisting.append(f)
+                else:
+                    still_new.append(f)
+            new = still_new
+            resolved = [meta for bucket in leftover.values() for meta in bucket]
 
         return ScanDiff(
             previous_at=previous.at if previous else None,
