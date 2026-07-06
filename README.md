@@ -271,12 +271,12 @@ has four tabs:
 
 ### Screenshots
 
-No screenshots are checked into the repo yet — the fastest way to see the UI is
-to run `./run.sh` and open `http://localhost:8080` (takes under a minute). If
-you're recording the demo video, drop the four tab screenshots here
-(`docs/img/scan-results.png`, `code-playground.png`, `agent-chat.png`,
-`trends.png`) and swap this note for `![Scan Results](docs/img/scan-results.png)`
-etc.
+| Scan input | Scan results | Trends |
+|---|---|---|
+| ![Scan input](docs/screenshots/sgai_landing.png) | ![Scan results](docs/screenshots/sgai_scan_results.png) | ![Trends](docs/screenshots/sgai_trends.png) |
+
+Or run it yourself: `./run.sh` and open `http://localhost:8080` (under a
+minute, no API key required for the deterministic scan).
 
 ## Demo commands
 

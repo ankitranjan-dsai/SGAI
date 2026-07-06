@@ -270,9 +270,6 @@ Full command reference: [README.md](README.md#quick-judge-run-under-5-minutes-no
 - **The fully-autonomous tool-calling pipeline (`--agentic`) needs a paid or
   higher-quota Gemini key.** The default `--explain` path uses two LLM calls
   total and stays within the free tier; the deterministic core needs no key.
-- **No screenshots are checked into the repo yet.** The UI is fastest seen
-  live (`./run.sh` → `localhost:8080`, under a minute); see the README's
-  Screenshots note for where to drop them.
 
 ## Future improvements
 
