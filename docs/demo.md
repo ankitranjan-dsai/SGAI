@@ -7,7 +7,7 @@ required for steps 1–5. Run from the repo root.
 
 ```bash
 uv sync
-uv run pytest -q        # expect: 30 passed
+uv run pytest -q        # expect: all green (275+ tests; count grows as the suite does)
 ```
 
 ## 1. Deterministic scan (dependencies + Bandit)

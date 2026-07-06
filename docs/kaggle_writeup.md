@@ -1,7 +1,7 @@
 # SGAI — a multi-agent security reviewer for AI-written code
 
 *Kaggle "AI Agents: Intensive Vibe Coding Capstone" — Freestyle track*
-*Repo: https://github.com/ankitranjan-dsai/SGAI · Demo video: [add link before submitting]*
+*Repo: https://github.com/ankitranjan-dsai/SGAI · Demo video: https://www.youtube.com/watch?v=deRzztaJo9E*
 
 > ~1,300 words (excluding code blocks) — well under the 2,500 cap.
 
@@ -142,7 +142,7 @@ Past the required concepts, six more subsystems separate "finds bugs" from
 
 ## Quality and reproducibility
 
-- **266 automated tests**, all green, covering every module above.
+- **275+ automated tests**, all green, covering every module above.
 - **Four CI workflows**: test/lint on every push, a security-audit workflow
   (SARIF upload), a scheduled dependency-audit workflow that opens its own
   fix PRs, and a release workflow that builds and publishes the container.
@@ -152,7 +152,7 @@ Past the required concepts, six more subsystems separate "finds bugs" from
 - A judge can reproduce the entire thing in two commands:
 
 ```bash
-uv sync && uv run pytest -q                        # 266 passed
+uv sync && uv run pytest -q                        # 275+ passed, all green
 uv run sgai scan ./examples/kaggle_demo_repo --deep --explain
 ```
 

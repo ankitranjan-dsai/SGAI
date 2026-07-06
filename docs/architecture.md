@@ -96,11 +96,14 @@ deployed service tracks repos across calls.
   `examples/sample_report.md`.
 - [x] **M3 — CLI end-to-end:** `sgai scan <repo>` discovers manifests + source,
   runs the tools, scores, and writes a Markdown report (`runner.py`, `cli.py`).
-- [ ] **M4 — Optional GitHub PR:** open a remediation PR with a scoped token.
+- [x] **M4 — Optional GitHub PR:** `github.open_pull_request` + `sgai fix --open-pr`
+  opens a remediation PR with a scoped token (dry run by default, opt-in only).
 - [x] **M4.5 — Live agent run:** multi-agent narration (`agents/narrator.py`,
   `agent_runner.py`) writes the report via Gemini; `sgai scan --explain`.
 - [x] **M6 — Sessions & Memory:** `memory.py` — persistent per-target scan
   history, new/fixed/still-open diffing in every report, accepted risks
   (`sgai history` / `sgai accept`), and an ADK `MemoryService` adapter.
 - [~] **M5 — Deploy + demo:** stateless FastAPI service (`api.py`) + Dockerfile +
-  Cloud Run docs (`docs/deploy.md`) done; demo video remains.
+  published GHCR image + Cloud Run docs (`docs/deploy.md`) all done; the
+  <5-minute demo video is the one remaining artifact (script ready at
+  `docs/video_script.md`).

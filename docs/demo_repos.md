@@ -10,7 +10,7 @@ the large ones.
 | # | Repo | Ecosystem / size | What it demonstrates | Verified |
 |---|---|---|---|---|
 | 1 | `./examples/kaggle_demo_repo` (bundled) | PyPI+npm+Go, tiny | End-to-end offline: multi-ecosystem deps, Bandit, Semgrep, SARIF, memory, secrets, container scan — no network/clone needed | 23 findings shallow, 32 with `--deep` |
-| 2 | [`adeyosemanputra/pygoat`](https://github.com/adeyosemanputra/pygoat) | Python, 18MB | Flagship "scan any repo by URL" + Python deps/Bandit at real-world scale | **85 findings** |
+| 2 | [`adeyosemanputra/pygoat`](https://github.com/adeyosemanputra/pygoat) | Python, 18MB | Flagship "scan any repo by URL" + Python deps/Bandit at real-world scale | **100 findings** (4 critical, 22 high, 27 medium, 47 low — re-verified live 2026-07-04; rises over time as SGAI adds detection capabilities, not a regression) |
 | 3 | [`snyk-labs/nodejs-goof`](https://github.com/snyk-labs/nodejs-goof) | npm, 8.5MB | npm dependency CVEs + reachability classification (large lockfile — this is the repo that exposed and validated the OSV batch-chunking fix) | **136 findings** |
 | 4 | [`0c34/govwa`](https://github.com/0c34/govwa) | Go, 1.3MB | Go dependency CVEs, fast clone for a live segment | **1 finding** |
 | 5 | [`OWASP/NodeGoat`](https://github.com/OWASP/NodeGoat) | npm, 9MB | Second target for the memory/diff/history segment (scan, edit, re-scan → "new / fixed / still open") | exists |

@@ -113,7 +113,7 @@ CI enforces on the pull request.
 
 ## Continuous integration (GitHub Actions)
 
-Three workflows ship with the repo:
+Four workflows ship with the repo:
 
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and
   pull request: it installs dependencies with `uv` on Python 3.11, runs the test
@@ -126,3 +126,5 @@ Three workflows ship with the repo:
 - [`.github/workflows/sgai-dependency-audit.yml`](../.github/workflows/sgai-dependency-audit.yml)
   re-audits every pinned dependency weekly and opens an upgrade PR
   (`sgai fix --open-pr`) when a new CVE lands.
+- [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and
+  publishes the `ghcr.io/ankitranjan-dsai/sgai` container image on every `v*` tag.

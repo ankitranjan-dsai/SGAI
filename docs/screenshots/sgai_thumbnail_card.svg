@@ -1,0 +1,21 @@
+<svg width="680" height="340" viewBox="0 0 680 340" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>SGAI thumbnail card</title>
+<desc>Promotional card reading SGAI, multi-agent AI security reviewer, with tags for Google ADK, MCP, and Kaggle capstone, alongside a shield checkmark icon connected to three small agent nodes.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#8a8f98" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="680" height="340" fill="#ffffff"/>
+<text x="48" y="170" font-size="56" font-weight="500" fill="#101114" font-family="sans-serif">SGAI</text>
+<text x="48" y="215" font-size="20" font-weight="400" fill="#3c4149" font-family="sans-serif">Multi-agent AI security reviewer</text>
+<text x="48" y="252" font-size="14" font-weight="400" fill="#6b7280" font-family="sans-serif">Google ADK &#183; MCP &#183; Kaggle capstone</text>
+<line x1="480" y1="90" x2="518" y2="122" stroke="#8a8f98" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="560" y1="70" x2="560" y2="122" stroke="#8a8f98" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="620" y1="100" x2="602" y2="122" stroke="#8a8f98" stroke-width="1.5" marker-end="url(#arrow)"/>
+<circle cx="480" cy="90" r="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1"/>
+<circle cx="560" cy="70" r="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1"/>
+<circle cx="620" cy="100" r="9" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1"/>
+<rect x="500" y="120" width="120" height="110" rx="16" fill="#d1f2ea" stroke="#0f9d78" stroke-width="1.5"/>
+<path d="M527 178 L550 200 L597 150" fill="none" stroke="#04342C" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

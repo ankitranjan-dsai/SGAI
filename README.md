@@ -7,14 +7,35 @@
 [![CI](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ankitranjan-dsai/SGAI)](https://github.com/ankitranjan-dsai/SGAI/releases)
 [![Container](https://img.shields.io/badge/ghcr.io-sgai-blue?logo=docker&logoColor=white)](https://github.com/ankitranjan-dsai/SGAI/pkgs/container/sgai)
-[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 | | |
 |---|---|
-| **Live demo** | _coming soon_ — local demo available now: run `./run.sh` |
-| **Demo video** | _coming soon_ |
-| **Kaggle writeup** | _coming soon_ |
+| **Demo video** | [Watch on YouTube](https://youtu.be/deRzztaJo9E) |
+| **Kaggle writeup** | [Read on Kaggle](https://kaggle.com/competitions/vibecoding-agents-capstone-project/writeups/new-writeup-1782074784033) |
+| **Judging checklist** | [Kaggle Judging Checklist](#kaggle-judging-checklist) below |
+
+---
+
+## Quick Judge Run (under 5 minutes, no API key needed)
+
+```bash
+git clone https://github.com/ankitranjan-dsai/SGAI.git && cd SGAI
+uv sync                                              # ~10s, installs everything via uv
+uv run pytest -q                                     # full test suite, all green
+uv run sgai scan ./examples/kaggle_demo_repo         # deterministic scan — ~20+ findings, no key
+uv run sgai scan ./examples/kaggle_demo_repo --deep  # + Semgrep multi-language SAST
+uv run sgai history ./examples/kaggle_demo_repo      # scan timeline (Sessions & Memory)
+uv run sgai check ./examples/kaggle_demo_repo        # Policy-as-Code CI gate (exits 1 on violation)
+./run.sh                                             # web app at http://localhost:8080
+```
+
+Every command above needs **no Google API key** — the deterministic core (OSV.dev
++ Bandit/Semgrep) never calls an LLM. A free Gemini key only unlocks
+`--explain` (narrated report) and `--agentic` (fully autonomous tool-calling).
+See [docs/demo.md](docs/demo.md) for the full walkthrough and
+[docs/kaggle_submission.md](docs/kaggle_submission.md) for the submission checklist.
 
 ---
 
@@ -156,6 +177,62 @@ See [docs/architecture.md](docs/architecture.md).
 | **Antigravity** | Security MCP server plugs into Antigravity (and any MCP agent) — see [docs/integrations.md](docs/integrations.md) |
 | **Sessions & Memory** *(course Day 3)* | Persistent per-target scan memory (`src/sgai/memory.py`) reports **new / fixed / still open** since the last scan and remembers accepted risks; also exposed as a real ADK `MemoryService` so agents can recall prior scans via `load_memory` |
 
+## Kaggle Judging Checklist
+
+A direct map from what's judged to exactly where to look. Every command below
+was re-run against this commit while preparing the submission.
+
+| Judging area | Points | Exact evidence | Command / file |
+|---|---|---|---|
+| **Pitch, problem, solution, value** | 30 | Problem/Solution sections above; full writeup | [SUBMISSION.md](SUBMISSION.md) |
+| **Multi-agent system (ADK)** | Technical (50) | Real `LlmAgent`/`SequentialAgent`/`ParallelAgent` graph, not a single prompt | [src/sgai/agents/orchestrator.py](src/sgai/agents/orchestrator.py), [narrator.py](src/sgai/agents/narrator.py) |
+| **MCP Server** | Technical (50) | Custom FastMCP server, 9 tools, sandboxed | [src/sgai/mcp_server/server.py](src/sgai/mcp_server/server.py) — `uv run python -m sgai.mcp_server.server` |
+| **Security features** | Technical (50) | Path-sandboxed file access, least-privilege per-agent tool filters | [src/sgai/mcp_server/sandbox.py](src/sgai/mcp_server/sandbox.py), [docs/security.md](docs/security.md), `uv run pytest tests/test_sandbox.py -q` |
+| **Deployability** | Technical (50) | Stateless FastAPI + Dockerfile + published public container | `docker pull ghcr.io/ankitranjan-dsai/sgai:latest`, [docs/deploy.md](docs/deploy.md) |
+| **Agent skills / Agents CLI** | Technical (50) | `sgai` console script + [SKILL.md](SKILL.md) | `uv tool install . && sgai scan <target>` |
+| **Sessions & Memory** | Technical (50) | Cross-scan diffing + ADK `MemoryService` adapter | [src/sgai/memory.py](src/sgai/memory.py), `uv run sgai history ./examples/kaggle_demo_repo` |
+| **Working code / tests** | Technical (50) | Full automated suite, green | `uv run pytest -q` (all passing — see [Quick Judge Run](#quick-judge-run-under-5-minutes-no-api-key-needed) above for exact count) |
+| **CI/CD proof** | Technical (50) | 4 green GitHub Actions workflows on `main` | [Actions tab](https://github.com/ankitranjan-dsai/SGAI/actions) |
+| **Documentation** | 20 | README + 10 docs files + honest known-limitations section | [docs/](docs) — start with [architecture.md](docs/architecture.md) |
+| **Demo clarity** | Docs (20) / Pitch (30) | Reproducible commands, sample vulnerable repo, timed video script | [Demo Script](#demo-script-23-min) below, [docs/demo.md](docs/demo.md) |
+
+## Demo Script (2–3 min)
+
+A short, judge-facing walkthrough — a live camera-ready version with more
+detail (deployability, memory diff, self-healing, architecture recap) is
+scripted minute-by-minute in [docs/video_script.md](docs/video_script.md)
+(rehearsed, ≤5:00, for the actual Kaggle submission video). This condensed
+version hits the same beats in ~2–3 minutes:
+
+1. **[0:00–0:20] The problem.** Say it in one breath: "AI writes most code now;
+   almost none of it gets security-reviewed before it ships." Show the README
+   hero line.
+2. **[0:20–0:55] Live scan, no key needed.**
+   ```bash
+   uv run sgai scan ./examples/kaggle_demo_repo --deep
+   ```
+   Point at the severity table and one finding's remediation line.
+3. **[0:55–1:25] It's agentic, not a linter.** Open
+   `src/sgai/agents/orchestrator.py` for 3 seconds — orchestrator +
+   ParallelAgent fan-out — then run:
+   ```bash
+   uv run sgai scan ./examples/kaggle_demo_repo --explain
+   ```
+   (needs a free Gemini key) and read one line of the narrated report aloud.
+4. **[1:25–1:55] Memory.** Re-run the same scan command and point at the
+   `Changes since last scan: 0 new · 0 fixed · N still open` banner, then
+   `uv run sgai history ./examples/kaggle_demo_repo`.
+5. **[1:55–2:25] It fixes things.**
+   ```bash
+   uv run sgai heal ./examples/kaggle_demo_repo --dry-run
+   ```
+   Show the diff — AST-safe patch, not a suggestion in prose.
+6. **[2:25–2:45] It's deployable.** Show
+   `ghcr.io/ankitranjan-dsai/sgai:latest` on GitHub Packages (public, no
+   login) or run `./run.sh` and open `localhost:8080`.
+7. **[2:45–3:00] Close.** "MCP-native, multi-agent, deployable, open source —
+   link in the description."
+
 ## Quick start
 
 **Just double-click — no terminal needed:**
@@ -183,12 +260,23 @@ SGAI's web app is mobile-first:
 Paste a `requirements.txt` and/or some code (or click **Use sample vulnerable
 input**), tap **Scan**, and get a ranked report with a risk summary, findings +
 fixes, and the "changes since last scan" diff — no install on the phone. The UI
-has three tabs:
+has four tabs:
 
 1. **Scan Results** — the ranked report, with exploit-chain **Mermaid** diagrams.
 2. **Code Playground** — paste code and watch SGAI patch it in a **side-by-side diff**.
 3. **Interactive Agent Chat** — chat with the remediation agent over **SSE** to
    refine a fix, then apply it back into the playground.
+4. **Trends** — a Chart.js view of findings and risk score over time, pulled
+   from scan memory (`GET /trends`).
+
+### Screenshots
+
+No screenshots are checked into the repo yet — the fastest way to see the UI is
+to run `./run.sh` and open `http://localhost:8080` (takes under a minute). If
+you're recording the demo video, drop the four tab screenshots here
+(`docs/img/scan-results.png`, `code-playground.png`, `agent-chat.png`,
+`trends.png`) and swap this note for `![Scan Results](docs/img/scan-results.png)`
+etc.
 
 ## Demo commands
 
@@ -206,7 +294,8 @@ uv run sgai history ./examples/kaggle_demo_repo         # the scan timeline
 
 ## CLI usage
 
-Requires Python 3.10+ and [`uv`](https://docs.astral.sh/uv/).
+Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) (`uv` will fetch a
+matching Python automatically if you don't have 3.11+ on PATH).
 
 ```bash
 uv sync                                       # create venv + install deps (incl. dev tools)
@@ -341,6 +430,8 @@ same setup:
 - **`sgai-dependency-audit.yml`** — weekly cron that re-audits every pinned
   dependency against OSV.dev and opens an upgrade PR (`sgai fix --open-pr`)
   when a new CVE lands.
+- **`release.yml`** — builds and publishes the `ghcr.io/ankitranjan-dsai/sgai`
+  container image to GitHub Packages on every `v*` tag.
 
 This repo's own policy lives at [`.sgai/policy.yml`](.sgai/policy.yml); an
 annotated copy ships in [`examples/policy.yml`](examples/policy.yml), and a

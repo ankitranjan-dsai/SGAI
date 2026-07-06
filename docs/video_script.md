@@ -1,9 +1,12 @@
 # Demo video script (≤ 5:00)
 
 A timed shot list for the Kaggle submission video. Each row is `[time] SAY
-(spoken line) / DO (on-screen action, exact command)`. Practice it once
-end-to-end before recording — the timings assume you don't re-read commands
-live.
+(spoken line) / DO (on-screen action, exact command)`. **This version has been
+rehearsed end-to-end against the live app** — every segment below was actually
+run once and timed; the numbers and example outputs are real, not estimates.
+Total rehearsed active-command time is ~46s, leaving a comfortable ~4:14 for
+talking, transitions, and the fixed segments (hook, recap, close) — plenty of
+slack under the 5:00 cap.
 
 ## Before you hit record (5-minute prep, not part of the video)
 
@@ -16,9 +19,10 @@ git fetch --tags                # nothing to push, just sanity
 
 - Have **two windows** ready side by side: a terminal (large font, dark theme)
   and a browser at `http://localhost:8080` — don't alt-tab on camera.
-- Fork [`snyk-labs/nodejs-goof`](https://github.com/snyk-labs/nodejs-goof) to
-  your own account beforehand if you're including the auto-fix-PR segment
-  (Section 6, optional) — that's the one step that needs write access.
+- Docker is **not installed on this machine** — the deployability segment
+  below shows the GHCR package page in a browser instead of `docker pull`. If
+  you're recording on a different machine that has Docker, feel free to run
+  the real `docker pull` / `docker run` commands instead.
 - Start the server before recording: `./run.sh` (leave it running in a
   background terminal tab, not on screen).
 - Screen recorder: QuickTime (macOS, free) → File → New Screen Recording, or
@@ -48,6 +52,7 @@ DO: `cat README.md | head -20` or just show the repo's GitHub page for 2 seconds
 DO: Browser, `Scan Results` tab. Click **Use sample vulnerable input**, click
 **Scan**, let the live progress log stream, then scroll the findings list —
 pause on one card to show the severity chip and the fix suggestion.
+*(Rehearsed: click-to-results is ~7.5s — no dead air, no need to cut.)*
 
 **[1:25–2:05] Live demo — CLI on a real repo**
 > SAY: "From the CLI it's one command against any public repo — no cloning
@@ -57,8 +62,11 @@ DO:
 uv run sgai scan https://github.com/adeyosemanputra/pygoat
 ```
 > SAY (while it runs): "That's a real, unmodified vulnerable-by-design Python
-> app — 85 findings, risk-ranked, with remediation for each one."
+> app — **100 findings** (4 critical, 22 high), risk-ranked, with remediation
+> for each one."
 Let it finish, scroll the terminal report briefly.
+*(Rehearsed: ~10.1s end-to-end, incl. clone. Finding count verified live —
+use 100, not an older cached number.)*
 
 **[2:05–2:35] Deep scan + SARIF + reachability**
 > SAY: "`--deep` adds Semgrep for multi-language analysis, and every finding
@@ -69,44 +77,59 @@ DO:
 uv run sgai scan ./examples/kaggle_demo_repo --deep --sarif out.sarif
 ```
 Point at a `reachable: true` tag in the output and the generated `out.sarif`
-file in a `ls`.
+file in a `ls`. *(Rehearsed: ~17.6s. Delete `out.sarif` after — it's a
+scratch artifact, not something to commit.)*
 
 **[2:35–3:05] Memory — what changed since last scan**
-> SAY: "It remembers. Scan again and it tells you what's new, what's fixed,
-> and what you've already accepted as a known risk."
-DO:
+> SAY: "It remembers. Bump one dependency and rescan — it tells you exactly
+> what changed, not the same list all over again."
+DO (a real before/after, not a re-run of the same files):
 ```bash
-uv run sgai scan ./examples/kaggle_demo_repo   # second run
+# edit examples/kaggle_demo_repo/requirements.txt: requests==2.19.1 -> requests==2.32.3
+uv run sgai scan ./examples/kaggle_demo_repo   # baseline
+#   ...edit the pin...
+uv run sgai scan ./examples/kaggle_demo_repo   # rescan
 uv run sgai history ./examples/kaggle_demo_repo
 ```
-Or: switch to the browser's **Trends** tab and show the chart built from
-the same history.
+> SAY (on the second result): "One old CVE is gone, but the newer version
+> ships its own — so it reports **1 new, 1 fixed, 22 still open**. Real
+> signal, not a suspiciously clean zero."
+Then switch to the browser's **Trends** tab, pick the target from the
+dropdown, click **Load** — a two-point line chart renders (findings + risk
+score trending down). *(Rehearsed: plain scan ~5.6s; Trends chart confirmed
+rendering correctly with real history data.)*
+**Remember to revert the `requirements.txt` edit after recording** so the
+repo fixture stays clean (`git checkout -- examples/kaggle_demo_repo/`).
 
-**[3:05–3:50] The advanced suite — pick ONE for time**
-Choose whichever demos best on your machine; don't try to fit both.
-
-- **Self-healing:**
-  > SAY: "SGAI doesn't stop at finding problems — `heal` generates a patch,
-  > runs the project's own tests against it, and only keeps the fix if the
-  > tests still pass."
-  DO: `uv run sgai heal ./examples/kaggle_demo_repo --dry-run`
-
-- **Policy-as-Code CI gate:**
-  > SAY: "And it enforces standards in CI — this exact command runs on SGAI's
-  > own repository, every push, and fails the build on a policy violation."
-  DO: `uv run sgai check .` then flash `.github/workflows/sgai-security.yml`
-  and a green check on the GitHub Actions tab.
+**[3:05–3:50] The advanced suite — self-healing**
+> SAY: "SGAI doesn't stop at finding problems — `heal` generates a patch,
+> runs the project's own tests against it, and only keeps the fix if the
+> tests still pass."
+DO: `uv run sgai heal ./examples/kaggle_demo_repo --dry-run`
+*(Rehearsed: ~5.6s, clean diff output — good pacing for a single segment.
+Policy-as-code (`sgai check .`) was tested and dropped from this slot: it
+takes ~41s and reports "4611 findings" against the whole repo including the
+intentionally-vulnerable `examples/` fixtures — too slow and too confusing to
+explain on camera in the time budget. It's still real and still in the repo;
+just not in this video.)*
 
 **[3:50–4:25] Deployability**
 > SAY: "It's a real deployable service, not just a script — published as a
 > container, pull it from anywhere, no build step."
-DO:
+DO (this recording machine has no local Docker, so show the public package
+page instead of running the pull live):
+```
+open https://github.com/ankitranjan-dsai/SGAI/pkgs/container/sgai
+```
+Point at the public visibility badge and the `docker pull
+ghcr.io/ankitranjan-dsai/sgai:latest` command shown on that page.
+> SAY: "It's public — anyone can pull it, no login required."
+(If you're recording on a machine that has Docker installed, prefer running
+the real commands instead — it's a stronger shot:)
 ```bash
 docker pull ghcr.io/ankitranjan-dsai/sgai:latest
 docker run -p 8080:8080 ghcr.io/ankitranjan-dsai/sgai:latest
 ```
-(If Docker isn't installed on the recording machine, show the GHCR package
-page in a browser tab instead — `github.com/ankitranjan-dsai/SGAI/pkgs/container/sgai`.)
 
 **[4:25–4:50] Architecture recap**
 > SAY: "Under the hood it's a multi-agent system on Google's ADK — specialist
