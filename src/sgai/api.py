@@ -848,7 +848,10 @@ async def _chat_frames(req: ChatRequest):
 
     try:
         reply = await refine_patch_chat(req.code, req.message, req.history, summary)
-        includes_patch = "```" in reply  # the agent returned a code block
+        # A code fence in the LLM's free-form reply is not proof a patch exists —
+        # gate on the deterministic plan too, so the UI never claims "applied" for
+        # code with nothing to patch just because the model echoed it back.
+        includes_patch = bool(plan.patches) and "```" in reply
     except Exception:  # noqa: BLE001 — always answer, even with no model
         reply, includes_patch = _fallback_reply(req.message, plan, patched)
 
