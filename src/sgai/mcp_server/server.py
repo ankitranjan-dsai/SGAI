@@ -39,8 +39,8 @@ from sgai.config import (
     OSV_QUERY_BATCH_URL,
     OSV_QUERY_URL,
     OSV_VULN_URL,
-    SKIP_DIR_GLOBS,
-    SKIP_DIRS,
+    skip_dir_globs,
+    is_skipped,
 )
 from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
@@ -351,7 +351,7 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
         # Without --exclude, Bandit recurses into .venv/node_modules and
         # reports every third-party file, burying first-party findings.
         ["bandit", "-r", "-f", "json", "-q",
-         "-x", ",".join(SKIP_DIR_GLOBS), str(target)],
+         "-x", ",".join(skip_dir_globs(target)), str(target)],
         capture_output=True,
         text=True,
         check=False,
@@ -862,7 +862,6 @@ _SECRET_SCAN_SUFFIXES = {
     ".yml", ".yaml", ".json", ".toml", ".ini", ".cfg", ".conf", ".tf", ".txt",
     ".properties", ".xml", ".gradle", ".md", "",
 }
-_SECRET_SKIP_DIRS = SKIP_DIRS
 
 
 @mcp.tool()
@@ -897,7 +896,7 @@ def scan_secrets(path: str, root: str, use_llm: bool = False) -> dict[str, Any]:
             p for p in sorted(target.rglob("*"))
             if p.is_file()
             and p.suffix.lower() in _SECRET_SCAN_SUFFIXES
-            and not _SECRET_SKIP_DIRS & set(p.parts)
+            and not is_skipped(p, target)
             and p.name not in GENERATED_REPORT_NAMES
         ]
     else:
@@ -1020,14 +1019,11 @@ def _gemini_secret_classifier(candidates: list[dict]) -> list[bool]:
 _TEST_TIMEOUT_DEFAULT = 30
 _TEST_TIMEOUT_CEILING = 120
 
-_TEST_SKIP_DIRS = SKIP_DIRS
-
-
 def _has_files(target: Path, predicate: Callable[[Path], bool]) -> bool:
     return any(
         predicate(p)
         for p in target.rglob("*")
-        if p.is_file() and not _TEST_SKIP_DIRS & set(p.parts)
+        if p.is_file() and not is_skipped(p, target)
     )
 
 
@@ -1177,7 +1173,7 @@ def list_source_files(root: str) -> dict[str, Any]:
         for p in root_path.rglob("*")
         if p.is_file()
         and p.suffix in SOURCE_EXTENSIONS
-        and not SKIP_DIRS & set(p.parts)
+        and not is_skipped(p, root_path)
     ]
     return {"root": str(root_path), "files": sorted(files), "count": len(files)}
 

@@ -10,7 +10,7 @@ tree that happened to contain no virtualenv.
 
 from pathlib import Path
 
-from sgai.config import GENERATED_REPORT_NAMES, SKIP_DIRS
+from sgai.config import GENERATED_REPORT_NAMES, SKIP_DIRS, is_skipped
 from sgai.mcp_server.server import (
     _is_test_only_noise,
     list_source_files,
@@ -24,6 +24,7 @@ SECRET_LINE = 'aws_key = "AKIAIOSFODNN7EXPMPL1"\n'
 
 def _repo(tmp_path: Path) -> Path:
     """A repo with one real source file plus the usual uninteresting noise."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "app.py").write_text(f"import os\n{SECRET_LINE}")
 
     vendored = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages" / "dep"
@@ -111,3 +112,55 @@ def test_assert_is_noise_in_tests_but_real_in_source():
     assert not _is_test_only_noise("B602", "tests/test_thing.py"), (
         "shell-injection in a test file is still worth reporting"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Where the repo happens to live must not change what gets scanned
+#
+# The first version of this scoping fix matched SKIP_DIRS against each
+# candidate's *absolute* `Path.parts`. That let a directory ABOVE the scan root
+# veto the scan: a checkout at ~/build/myrepo matched "build" for every file, so
+# every walker yielded nothing and SGAI reported a clean repo. A security tool
+# that silently finds nothing is worse than one that crashes, so these pin the
+# invariant directly rather than trusting any single walker.
+# --------------------------------------------------------------------------- #
+def test_is_skipped_ignores_directory_names_above_the_scan_root():
+    root = Path("/home/ci/build/myrepo")
+    assert not is_skipped(root / "app.py", root)
+    assert not is_skipped(root / "src" / "main.py", root)
+
+
+def test_is_skipped_still_excludes_output_dirs_below_the_root():
+    root = Path("/home/ci/build/myrepo")
+    assert is_skipped(root / "build" / "out.py", root)
+    assert is_skipped(root / ".venv" / "lib" / "dep.py", root)
+    assert is_skipped(root / "src" / "node_modules" / "x" / "i.js", root)
+
+
+def test_is_skipped_does_not_skip_paths_outside_the_root():
+    assert not is_skipped(Path("/elsewhere/app.py"), Path("/home/ci/repo"))
+
+
+def test_scanners_find_the_same_secret_under_a_build_ancestor(tmp_path):
+    """Identical content, two locations — only the ancestor's name differs."""
+    plain = _repo(tmp_path / "normal" / "proj")
+    shadowed = _repo(tmp_path / "build" / "proj")
+
+    plain_hits = scan_secrets(str(plain), str(plain))["count"]
+    shadowed_hits = scan_secrets(str(shadowed), str(shadowed))["count"]
+
+    assert plain_hits > 0, "fixture should contain a detectable secret"
+    assert shadowed_hits == plain_hits, (
+        "an ancestor directory named 'build' silently disabled the secret scan"
+    )
+
+
+def test_list_source_files_is_unaffected_by_an_ancestor_named_target(tmp_path):
+    plain = _repo(tmp_path / "normal" / "proj")
+    shadowed = _repo(tmp_path / "target" / "proj")
+
+    plain_files = list_source_files(str(plain))["count"]
+    shadowed_files = list_source_files(str(shadowed))["count"]
+
+    assert plain_files > 0
+    assert shadowed_files == plain_files

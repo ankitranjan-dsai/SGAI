@@ -13,7 +13,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sgai.config import SKIP_DIRS
+from sgai.config import is_skipped
 from sgai.manifests import MANIFEST_GLOBS, parse_manifest
 
 # OSV ecosystem → Package-URL type.
@@ -39,7 +39,7 @@ def collect_packages(repo_dir: str) -> list[dict]:
     packages: list[dict] = []
     for glob in MANIFEST_GLOBS:
         for manifest in sorted(root.rglob(glob)):
-            if SKIP_DIRS & set(manifest.parts):
+            if is_skipped(manifest, root):
                 continue
             for pkg in parse_manifest(manifest):
                 key = (pkg["ecosystem"], pkg["name"], pkg["version"])

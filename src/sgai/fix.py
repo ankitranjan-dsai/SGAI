@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 from packaging.version import InvalidVersion, Version
 
-from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL, SKIP_DIRS
+from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL, is_skipped
 from sgai.manifests import parse_manifest
 from sgai.models import Finding
 
@@ -155,7 +155,7 @@ async def plan_fixes(repo_dir: str) -> list[Fix]:
     seen: set[tuple[str, str, str]] = set()  # (file, package, version)
     for glob in MANIFEST_GLOBS:
         for manifest in sorted(root.rglob(glob)):
-            if SKIP_DIRS & set(manifest.parts):
+            if is_skipped(manifest, root):
                 continue
             rel = manifest.relative_to(root).as_posix()
             if is_test_file(rel):
