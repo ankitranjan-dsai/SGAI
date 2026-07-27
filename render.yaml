@@ -1,0 +1,25 @@
+# Render Blueprint — one-click deploy of the SGAI audit service.
+#
+#   https://dashboard.render.com/blueprints  →  New Blueprint Instance
+#   → pick ankitranjan-dsai/SGAI → Apply
+#
+# Render builds the repo's Dockerfile and injects $PORT, which the image's
+# CMD already honours. The free plan sleeps after 15 minutes idle, so the
+# first request after a quiet spell pays a cold start.
+services:
+  - type: web
+    name: sgai
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Scan memory lives under a writable path rather than $HOME.
+      - key: SGAI_HOME
+        value: /tmp/sgai
+      # AI narration (--explain) is optional; the deterministic scanner needs
+      # no key. Set this in the Render dashboard if you want narration on.
+      - key: GOOGLE_API_KEY
+        sync: false
