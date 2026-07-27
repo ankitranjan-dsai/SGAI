@@ -104,3 +104,83 @@ def test_a_real_url_reference_wins_over_a_synthesised_one():
                       manifest="requirements.txt")
     rule = to_sarif([finding])["runs"][0]["tool"]["driver"]["rules"][0]
     assert rule["helpUri"] == "https://osv.dev/GHSA-jjjj-kkkk-llll"
+
+
+# --------------------------------------------------------------------------- #
+# Fixture credentials
+#
+# A test suite for a secret scanner is full of credential-shaped literals, and
+# SGAI's own is no exception: documentation-style AWS keys and dummy passwords
+# live in the fixtures a few files over. Those results stay in the SARIF — a
+# scanner that hides its own matches is not one you can audit — but they must
+# not read as a live leak in a Security tab. SARIF says
+# that with `suppressions`: the result stands, annotated with why the tool
+# considers it non-actionable.
+#
+# The suppression needs *both* signals to agree: the secret scanner's own
+# fixture classification (Info) and the shared test-path classifier. Either one
+# alone would let a live production credential be explained away.
+# --------------------------------------------------------------------------- #
+def _suppressions(result: dict) -> list[dict]:
+    return result.get("suppressions", [])
+
+
+def _secret(location, severity=Severity.INFO, check_id="aws-access-key"):
+    return Finding(
+        id=check_id, source="secret", title="AWS access key id", severity=severity,
+        location=location, remediation="Appears to be test/fixture data.",
+    )
+
+
+def test_a_fixture_credential_is_suppressed_with_a_justification():
+    result = to_sarif([_secret("tests/test_scan_scoping.py:22")])["runs"][0]["results"][0]
+    suppressions = _suppressions(result)
+    assert suppressions, "fixture credential was not marked suppressed"
+    assert suppressions[0]["kind"] in ("inSource", "external")  # the SARIF enum
+    assert "tests/test_scan_scoping.py" in suppressions[0]["justification"], (
+        "the justification must name the fixture it is justifying"
+    )
+
+
+def test_suppressing_never_drops_a_result():
+    """Option 3, not option 2: the Security tab shows it, dismissed with a reason."""
+    findings = _findings() + [
+        _secret("tests/test_phase3_secrets.py:46", check_id="generic-credential"),
+        _secret("examples/vulnerable_app/app.py:7"),
+    ]
+    run = to_sarif(findings)["runs"][0]
+    assert len(run["results"]) == len(findings)
+    assert sum(1 for r in run["results"] if _suppressions(r)) == 2
+
+
+def test_a_production_credential_is_never_suppressed():
+    result = to_sarif([_secret("src/sgai/api.py:31", severity=Severity.HIGH)])["runs"][0]["results"][0]
+    assert not _suppressions(result)
+
+
+def test_a_credential_the_scanner_scored_as_live_is_never_suppressed():
+    """A test path alone is not enough: if the scanner did not classify the
+    value as fixture data, a directory name must not silence it."""
+    result = to_sarif([_secret("tests/fixtures/prod_dump.py:3", severity=Severity.HIGH)])["runs"][0]["results"][0]
+    assert not _suppressions(result)
+
+
+def test_an_info_credential_outside_a_test_path_is_never_suppressed():
+    result = to_sarif([_secret("src/sgai/config.py:12")])["runs"][0]["results"][0]
+    assert not _suppressions(result)
+
+
+def test_other_findings_in_test_paths_are_not_suppressed():
+    """Only credential findings are fixture-explainable. A `shell=True` in a
+    test helper is a real unsafe pattern and keeps its own alert."""
+    finding = Finding(id="B602", source="static", title="shell=True", severity=Severity.INFO,
+                      location="tests/helpers/run.py:9", remediation="Pass args as a list.")
+    assert not _suppressions(to_sarif([finding])["runs"][0]["results"][0])
+
+
+def test_a_suppressed_result_reads_as_a_fixture_at_a_glance():
+    """GitHub's alert list shows the message, not the suppression — so the
+    message itself has to say what this is."""
+    result = to_sarif([_secret("tests/test_scan_scoping.py:22")])["runs"][0]["results"][0]
+    assert result["message"]["text"].lower().startswith("test fixture")
+    assert "AWS access key id" in result["message"]["text"]  # the finding survives intact

@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import re
 
-from sgai.models import Finding
+from sgai.models import Finding, Severity
+from sgai.risk import is_test_file
 
 _LEVEL = {
     "Critical": "error", "High": "error", "Medium": "warning",
@@ -78,6 +79,56 @@ def _help_uri(finding: Finding) -> str:
     return TOOL_URI
 
 
+# A test suite for a secret scanner is necessarily full of credential-shaped
+# literals, and SGAI's own is no exception: documentation-style AWS keys and
+# dummy passwords that exist to prove the detectors fire. (They are not quoted
+# here — a live-looking token in production source is a High finding that fails
+# this repo's own `no-secrets` gate, which is the system working.) They are
+# genuine matches, so they stay in the SARIF: a scanner that silently drops
+# its own hits is one nobody can audit. But a reader of GitHub's Security tab
+# must not mistake them for a live leak, and SARIF has the exact vocabulary for
+# that — `suppressions` keeps the result and records why the tool considers it
+# non-actionable, instead of hiding it.
+#
+# `external`, not `inSource`: the judgement comes from SGAI's own classification
+# (severity plus path convention), not from an annotation written in the scanned
+# file. Nothing in the source claims this.
+SUPPRESSION_KIND = "external"
+
+
+def _fixture_credential_path(finding: Finding) -> str | None:
+    """The fixture file a credential finding sits in, else ``None``.
+
+    Two independent signals must agree before SGAI explains a credential away:
+
+    * the secret scanner classified it as test/mock/fixture context, which is
+      the only way a secret finding is scored ``Info`` rather than ``High``; and
+    * the shared :func:`~sgai.risk.is_test_file` classifier agrees the path is
+      test/example code.
+
+    Either signal alone is too weak to silence a credential. A directory named
+    ``tests/`` must never mute a value the scanner ranked as live, and an ``Info``
+    score must never mute one sitting in a production path.
+    """
+    if finding.source != "secret" or finding.severity != Severity.INFO:
+        return None
+    m = _FILE_LINE.match(finding.location)
+    if not m or not is_test_file(m.group("file")):
+        return None
+    return m.group("file")
+
+
+def _justification(path: str) -> str:
+    """Why SGAI treats this credential as non-actionable — a reviewer reads this."""
+    return (
+        f"Credential-shaped literal in test/fixture code ({path}). SGAI's secret "
+        "scanner classified it as fixture context and scored it Info, and test "
+        "paths are outside the production surface the policy gate protects. "
+        "Confirm the value was never live; if it was, rotate it and replace the "
+        "fixture with an obviously fake value."
+    )
+
+
 def to_sarif(findings: list[Finding]) -> dict:
     """Convert findings into a SARIF 2.1.0 document."""
     rules: dict[str, dict] = {}
@@ -91,12 +142,24 @@ def to_sarif(findings: list[Finding]) -> dict:
                 "shortDescription": {"text": f.title[:120]},
                 "helpUri": _help_uri(f),
             }
-        results.append({
+        message = f"{f.title} ({f.location}). Fix: {f.remediation}"
+        fixture = _fixture_credential_path(f)
+        result = {
             "ruleId": f.id,
             "level": _LEVEL.get(f.severity.label, "warning"),
-            "message": {"text": f"{f.title} ({f.location}). Fix: {f.remediation}"},
+            # GitHub's alert list renders the message, not the suppression, so
+            # the message has to carry the verdict too — otherwise the first
+            # thing a reviewer reads is still "AWS access key id".
+            "message": {"text": f"Test fixture (suppressed): {message}" if fixture else message},
             "locations": [_location(f)],
-        })
+        }
+        if fixture:
+            result["suppressions"] = [{
+                "kind": SUPPRESSION_KIND,
+                "status": "accepted",
+                "justification": _justification(fixture),
+            }]
+        results.append(result)
 
     return {
         "$schema": SARIF_SCHEMA,

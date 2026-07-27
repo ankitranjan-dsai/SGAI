@@ -128,3 +128,23 @@ Four workflows ship with the repo:
   (`sgai fix --open-pr`) when a new CVE lands.
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and
   publishes the `ghcr.io/ankitranjan-dsai/sgai` container image on every `v*` tag.
+
+### Fixture credentials in the Security tab
+
+A repository that tests a secret scanner contains credential-shaped literals on
+purpose. SGAI reports them — hiding a match would make the scanner unauditable —
+but marks each one with a SARIF
+[`suppressions`](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+entry (`kind: external`) whose justification says why it is fixture data, and
+prefixes the alert message with `Test fixture (suppressed):`. A finding is only
+marked this way when the secret scanner scored it `Info` (its own fixture
+classification) *and* the path is test/example code; either signal alone leaves
+the credential reported as-is, so a live secret can never be explained away by
+the directory it sits in.
+
+Note that GitHub code scanning ignores `suppressions` on upload — the alerts
+still appear, which is why the message carries the verdict too. Tools that do
+honour the field (IDE SARIF viewers, and the
+[`advanced-security/dismiss-alerts`](https://github.com/advanced-security/dismiss-alerts)
+action, if you add it after the upload step) render them as dismissed with the
+justification attached.
