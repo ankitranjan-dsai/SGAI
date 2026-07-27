@@ -13,9 +13,8 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sgai.config import SKIP_DIRS
 from sgai.manifests import MANIFEST_GLOBS, parse_manifest
-
-_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
 
 # OSV ecosystem → Package-URL type.
 _PURL_TYPE = {"PyPI": "pypi", "npm": "npm", "Go": "golang", "crates.io": "cargo"}
@@ -40,7 +39,7 @@ def collect_packages(repo_dir: str) -> list[dict]:
     packages: list[dict] = []
     for glob in MANIFEST_GLOBS:
         for manifest in sorted(root.rglob(glob)):
-            if _SKIP_DIRS & set(manifest.parts):
+            if SKIP_DIRS & set(manifest.parts):
                 continue
             for pkg in parse_manifest(manifest):
                 key = (pkg["ecosystem"], pkg["name"], pkg["version"])

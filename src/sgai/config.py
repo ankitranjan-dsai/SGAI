@@ -27,3 +27,24 @@ OSV_VULN_URL: str = "https://api.osv.dev/v1/vulns"
 
 # Network timeout (seconds) for outbound calls to OSV.dev.
 HTTP_TIMEOUT: float = 20.0
+
+# Directories that never contain first-party code: virtualenvs, dependency
+# trees and build output. Every scanner must skip these — a vulnerability in a
+# vendored dependency belongs to the dependency scan (which reads manifests and
+# reports the *package*), not to static analysis of the user's source. Without
+# this, `sgai scan` on a repo with a local virtualenv drowns real findings in
+# thousands of third-party hits.
+SKIP_DIRS: frozenset[str] = frozenset({
+    ".git", ".venv", "venv", ".uv", "__pycache__",
+    "node_modules", "dist", "build", "target",
+})
+
+# Glob patterns for the same set, for tools like Bandit that take path globs
+# rather than being handed an explicit file list.
+SKIP_DIR_GLOBS: tuple[str, ...] = tuple(f"*/{d}/*" for d in sorted(SKIP_DIRS))
+
+# SGAI's own Markdown report quotes the findings it discovers, secrets and all.
+# It defaults to being written *into the directory being scanned*, so leaving it
+# readable makes each run ingest the previous run's output — findings breed and
+# `sgai check` fails on its own report. Skip it by name.
+GENERATED_REPORT_NAMES: frozenset[str] = frozenset({"sgai_report.md"})
