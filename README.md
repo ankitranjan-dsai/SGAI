@@ -4,6 +4,7 @@
 
 **Kaggle AI Agents: Intensive Vibe Coding Capstone — Track: Freestyle**
 
+[![Live demo](https://img.shields.io/badge/live%20demo-sgai.onrender.com-brightgreen)](https://sgai-n2ov.onrender.com)
 [![CI](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/ankitranjan-dsai/SGAI/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ankitranjan-dsai/SGAI)](https://github.com/ankitranjan-dsai/SGAI/releases)
 [![Container](https://img.shields.io/badge/ghcr.io-sgai-blue?logo=docker&logoColor=white)](https://github.com/ankitranjan-dsai/SGAI/pkgs/container/sgai)
@@ -12,6 +13,7 @@
 
 | | |
 |---|---|
+| **Live demo** | **[sgai-n2ov.onrender.com](https://sgai-n2ov.onrender.com)** — paste a public GitHub URL and scan it. No sign-up, no API key. Free tier sleeps when idle, so the first load can take ~50s. |
 | **Demo video** | [Watch on YouTube](https://youtu.be/deRzztaJo9E) |
 | **Kaggle writeup** | [Read on Kaggle](https://kaggle.com/competitions/vibecoding-agents-capstone-project/writeups/new-writeup-1782074784033) |
 | **Judging checklist** | [Kaggle Judging Checklist](#kaggle-judging-checklist) below |
