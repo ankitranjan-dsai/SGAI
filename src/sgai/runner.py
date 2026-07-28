@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sgai.config import is_skipped
 from sgai.manifests import COMPOSE_GLOBS, CONTAINER_GLOBS, IAC_GLOBS, MANIFEST_GLOBS
 from sgai.mcp_server import server
 from sgai.models import Finding
@@ -30,8 +31,6 @@ if TYPE_CHECKING:
 # Keep CLI output clean — silence per-request HTTP info logs.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Directories that never contain auditable project source.
-_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
 
 
 def target_key(label: str | None, repo: str) -> str:
@@ -59,7 +58,7 @@ async def gather_findings(repo: str, deep: bool = False) -> list[Finding]:
     dep_result: dict = {"vulnerable": []}
     for glob in MANIFEST_GLOBS:
         for manifest in sorted(root.rglob(glob)):
-            if _SKIP_DIRS & set(manifest.parts):
+            if is_skipped(manifest, root):
                 continue
             res = await server.scan_manifest(str(manifest), str(root))
             # Tag each hit with its manifest so downstream stages know whether
@@ -77,7 +76,7 @@ async def gather_findings(repo: str, deep: bool = False) -> list[Finding]:
     extra: list[Finding] = []
     for glob in [*CONTAINER_GLOBS, *COMPOSE_GLOBS, *IAC_GLOBS]:
         for cfg in sorted(root.rglob(glob)):
-            if _SKIP_DIRS & set(cfg.parts):
+            if is_skipped(cfg, root):
                 continue
             res = server.scan_dockerfile(str(cfg), str(root))
             extra += findings_from_container_scan(res, str(cfg.relative_to(root)))

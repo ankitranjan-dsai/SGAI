@@ -33,7 +33,15 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL, OSV_VULN_URL
+from sgai.config import (
+    GENERATED_REPORT_NAMES,
+    HTTP_TIMEOUT,
+    OSV_QUERY_BATCH_URL,
+    OSV_QUERY_URL,
+    OSV_VULN_URL,
+    skip_dir_globs,
+    is_skipped,
+)
 from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 
 mcp = FastMCP("sgai-security-tools")
@@ -340,7 +348,10 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
     proc = subprocess.run(
-        ["bandit", "-r", "-f", "json", "-q", str(target)],
+        # Without --exclude, Bandit recurses into .venv/node_modules and
+        # reports every third-party file, burying first-party findings.
+        ["bandit", "-r", "-f", "json", "-q",
+         "-x", ",".join(skip_dir_globs(target)), str(target)],
         capture_output=True,
         text=True,
         check=False,
@@ -361,18 +372,39 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
         except ValueError:
             return filename
 
-    findings = [
-        {
+    findings = []
+    for r in report.get("results", []):
+        rel = _relativize(r.get("filename"))
+        if _is_test_only_noise(r.get("test_id"), rel):
+            continue
+        findings.append({
             "test_id": r.get("test_id"),
             "issue": r.get("issue_text"),
             "severity": r.get("issue_severity"),
             "confidence": r.get("issue_confidence"),
-            "file": _relativize(r.get("filename")),
+            "file": rel,
             "line": r.get("line_number"),
-        }
-        for r in report.get("results", [])
-    ]
+        })
     return {"findings": findings, "count": len(findings)}
+
+
+# Bandit rules that are only meaningful in shipped code. `assert` is the whole
+# point of a test file, but `python -O` strips it, so B101 is a real (low)
+# finding in production paths and pure noise in tests. Left unfiltered it
+# dominates the report: 598 of 667 findings on this repo were asserts in
+# ``tests/``, which buries everything that matters.
+_TEST_ONLY_NOISE = {"B101"}
+
+
+def _is_test_path(rel_path: str) -> bool:
+    parts = Path(rel_path).parts
+    return any(p in {"tests", "test", "testing"} for p in parts) or Path(
+        rel_path
+    ).name.startswith(("test_", "conftest"))
+
+
+def _is_test_only_noise(test_id: str | None, rel_path: str) -> bool:
+    return test_id in _TEST_ONLY_NOISE and _is_test_path(rel_path)
 
 
 @mcp.tool()
@@ -830,7 +862,6 @@ _SECRET_SCAN_SUFFIXES = {
     ".yml", ".yaml", ".json", ".toml", ".ini", ".cfg", ".conf", ".tf", ".txt",
     ".properties", ".xml", ".gradle", ".md", "",
 }
-_SECRET_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv", "dist", "build"}
 
 
 @mcp.tool()
@@ -865,7 +896,8 @@ def scan_secrets(path: str, root: str, use_llm: bool = False) -> dict[str, Any]:
             p for p in sorted(target.rglob("*"))
             if p.is_file()
             and p.suffix.lower() in _SECRET_SCAN_SUFFIXES
-            and not _SECRET_SKIP_DIRS & set(p.parts)
+            and not is_skipped(p, target)
+            and p.name not in GENERATED_REPORT_NAMES
         ]
     else:
         return {"error": f"{path!r} is not a file or directory"}
@@ -987,14 +1019,11 @@ def _gemini_secret_classifier(candidates: list[dict]) -> list[bool]:
 _TEST_TIMEOUT_DEFAULT = 30
 _TEST_TIMEOUT_CEILING = 120
 
-_TEST_SKIP_DIRS = {".venv", "venv", "node_modules", ".git", "target", "__pycache__"}
-
-
 def _has_files(target: Path, predicate: Callable[[Path], bool]) -> bool:
     return any(
         predicate(p)
         for p in target.rglob("*")
-        if p.is_file() and not _TEST_SKIP_DIRS & set(p.parts)
+        if p.is_file() and not is_skipped(p, target)
     )
 
 
@@ -1142,7 +1171,9 @@ def list_source_files(root: str) -> dict[str, Any]:
     files = [
         str(p.relative_to(root_path))
         for p in root_path.rglob("*")
-        if p.is_file() and p.suffix in SOURCE_EXTENSIONS
+        if p.is_file()
+        and p.suffix in SOURCE_EXTENSIONS
+        and not is_skipped(p, root_path)
     ]
     return {"root": str(root_path), "files": sorted(files), "count": len(files)}
 

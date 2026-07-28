@@ -16,6 +16,7 @@ import ast
 import re
 from pathlib import Path
 
+from sgai.config import is_skipped
 from sgai.models import Finding, Severity
 
 # Bandit reports severity as a string; map it to our normalized scale.
@@ -134,8 +135,6 @@ def findings_from_dependency_scan(result: dict) -> list[Finding]:
 # Dependency reachability
 # --------------------------------------------------------------------------- #
 
-# Directories that never hold first-party source.
-_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
 
 # PyPI distribution names whose import name differs beyond simple normalization.
 _PACKAGE_MODULE_ALIASES = {
@@ -274,7 +273,7 @@ def build_import_graph(repo_dir: str) -> dict[str, set[str]]:
     root = Path(repo_dir).resolve()
     graph: dict[str, set[str]] = {}
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or _SKIP_DIRS & set(path.parts):
+        if not path.is_file() or is_skipped(path, root):
             continue
         suffix = path.suffix.lower()
         try:

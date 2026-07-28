@@ -28,12 +28,10 @@ from pathlib import Path
 import httpx
 from packaging.version import InvalidVersion, Version
 
-from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL
+from sgai.config import HTTP_TIMEOUT, OSV_QUERY_BATCH_URL, OSV_QUERY_URL, is_skipped
 from sgai.manifests import parse_manifest
 from sgai.models import Finding
 
-# Directories that never hold first-party manifests.
-_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".uv"}
 
 
 @dataclass
@@ -157,7 +155,7 @@ async def plan_fixes(repo_dir: str) -> list[Fix]:
     seen: set[tuple[str, str, str]] = set()  # (file, package, version)
     for glob in MANIFEST_GLOBS:
         for manifest in sorted(root.rglob(glob)):
-            if _SKIP_DIRS & set(manifest.parts):
+            if is_skipped(manifest, root):
                 continue
             rel = manifest.relative_to(root).as_posix()
             if is_test_file(rel):
