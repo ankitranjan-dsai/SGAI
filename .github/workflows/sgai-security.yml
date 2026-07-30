@@ -1,6 +1,12 @@
 name: SGAI security audit
 
+# `push: main` is not redundant with `pull_request`. On a pull_request event the
+# SARIF is attached to refs/pull/N/merge, so Security -> Code scanning stayed
+# EMPTY for the default branch and its "0 open alerts" meant "never analysed",
+# not "clean". Code scanning only shows alerts for a ref it has actually seen.
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
