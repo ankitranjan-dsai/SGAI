@@ -23,7 +23,7 @@ import json
 import math
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 — SGAI drives Bandit/Semgrep/test runners; see sgai.proc.
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -43,6 +43,7 @@ from sgai.config import (
     is_skipped,
 )
 from sgai.mcp_server.sandbox import SandboxError, safe_resolve
+from sgai.proc import resolve_argv, resolve_exe
 
 mcp = FastMCP("sgai-security-tools")
 
@@ -347,10 +348,10 @@ def run_static_analysis(path: str, root: str) -> dict[str, Any]:
     except SandboxError as exc:
         return {"error": str(exc)}
 
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 — fixed argv list, no shell, resolved exe.
         # Without --exclude, Bandit recurses into .venv/node_modules and
         # reports every third-party file, burying first-party findings.
-        ["bandit", "-r", "-f", "json", "-q",
+        [resolve_exe("bandit"), "-r", "-f", "json", "-q",
          "-x", ",".join(skip_dir_globs(target)), str(target)],
         capture_output=True,
         text=True,
@@ -429,14 +430,14 @@ def run_semgrep(path: str, root: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
     if shutil.which("semgrep"):
-        cmd = ["semgrep"]
+        cmd = [resolve_exe("semgrep")]
     elif shutil.which("uvx"):
-        cmd = ["uvx", "--from", "semgrep", "semgrep"]
+        cmd = [resolve_exe("uvx"), "--from", "semgrep", "semgrep"]
     else:
         return {"findings": [], "skipped": True, "reason": "semgrep/uvx not available"}
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603 — fixed argv list, no shell, resolved exe.
             [*cmd, "scan", "--config", "auto", "--json", "--quiet", str(target)],
             capture_output=True,
             text=True,
@@ -1070,8 +1071,11 @@ def _detect_test_frameworks(target: Path) -> list[dict[str, Any]]:
 def _run_test_command(cmd: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
     """Run one detected test command under the strict timeout."""
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, cwd=str(cwd), check=False,
+        # cmd comes from _detect_test_frameworks' fixed table, never from a
+        # project-supplied string; resolve_argv pins the runner binary.
+        proc = subprocess.run(  # nosec B603
+            resolve_argv(cmd),
+            capture_output=True, text=True, timeout=timeout, cwd=str(cwd), check=False,
         )
     except subprocess.TimeoutExpired:
         return {"ran": True, "passed": False, "reason": f"tests timed out after {timeout}s"}

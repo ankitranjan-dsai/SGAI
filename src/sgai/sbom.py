@@ -56,8 +56,15 @@ def _now() -> str:
 
 
 def _serial(name: str, packages: list[dict]) -> str:
-    """Deterministic-ish urn:uuid serial number from the component set."""
-    digest = hashlib.sha1((name + "|".join(purl(p) for p in packages)).encode()).hexdigest()
+    """Deterministic-ish urn:uuid serial number from the component set.
+
+    SHA-256, not SHA-1: these digests only need to be collision-resistant
+    identifiers, but SGAI's own :mod:`sgai.fix` heal rule rewrites ``sha1`` to
+    ``sha256`` in the repositories it audits, so its source must not ship the
+    pattern it patches. Only the leading hex is consumed, so the wider digest
+    costs nothing.
+    """
+    digest = hashlib.sha256((name + "|".join(purl(p) for p in packages)).encode()).hexdigest()
     return f"urn:uuid:{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
 
 
@@ -89,12 +96,12 @@ def to_cyclonedx(packages: list[dict], name: str = "target") -> dict:
 
 def to_spdx(packages: list[dict], name: str = "target") -> dict:
     """Render components as an SPDX 2.3 JSON document."""
-    doc_ns = f"https://sgai.local/spdx/{name}/{hashlib.sha1(name.encode()).hexdigest()[:12]}"
+    doc_ns = f"https://sgai.local/spdx/{name}/{hashlib.sha256(name.encode()).hexdigest()[:12]}"
     root_ref = "SPDXRef-DOCUMENT"
     root_pkg_ref = "SPDXRef-Package-root"
 
     def spdx_ref(p: dict) -> str:
-        slug = hashlib.sha1(purl(p).encode()).hexdigest()[:16]
+        slug = hashlib.sha256(purl(p).encode()).hexdigest()[:16]
         return f"SPDXRef-Package-{slug}"
 
     spdx_packages = [{

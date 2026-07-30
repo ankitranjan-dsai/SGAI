@@ -10,10 +10,12 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 — SGAI drives git/gh; see sgai.proc for the argv contract.
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+
+from sgai.proc import resolve_argv, resolve_exe
 
 # Matches "owner/repo" shorthand (treated as a GitHub repo when no local path matches).
 _SHORTHAND = re.compile(r"^[\w.-]+/[\w.-]+$")
@@ -57,8 +59,8 @@ def cloned_repo(target: str, timeout: float = 120.0) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix="sgai-clone-") as tmp:
         dest = Path(tmp) / "repo"
         try:
-            proc = subprocess.run(
-                ["git", "clone", "--depth", "1", "--quiet", url, str(dest)],
+            proc = subprocess.run(  # nosec B603 — fixed argv list, no shell, resolved exe.
+                [resolve_exe("git"), "clone", "--depth", "1", "--quiet", url, str(dest)],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -96,7 +98,11 @@ def open_pull_request(repo_dir: str, branch: str, title: str, body: str) -> str:
     env = _gh_env()
 
     def run(args: list[str]) -> str:
-        proc = subprocess.run(args, cwd=repo_dir, capture_output=True, text=True, env=env)
+        # Every caller below passes a literal argv, and resolve_argv pins the
+        # executable so PATH cannot substitute git or gh.
+        proc = subprocess.run(  # nosec B603
+            resolve_argv(args), cwd=repo_dir, capture_output=True, text=True, env=env
+        )
         if proc.returncode != 0:
             raise PRError(f"`{' '.join(args[:2])}` failed: {proc.stderr.strip()[:300]}")
         return proc.stdout.strip()
@@ -140,9 +146,9 @@ def post_pr_review(
             if c.get("path") and c.get("line")
         ],
     }
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 — fixed argv list, no shell, resolved exe.
         [
-            "gh", "api", "--method", "POST",
+            resolve_exe("gh"), "api", "--method", "POST",
             f"repos/{owner_repo}/pulls/{pr_number}/reviews",
             "--input", "-",
         ],

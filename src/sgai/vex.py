@@ -94,7 +94,7 @@ def vex_statements(findings: list[Finding]) -> list[dict]:
 def build_vex(findings: list[Finding], author: str = "SGAI", target: str = "target") -> dict:
     """Assemble an OpenVEX document from a scan's dependency findings."""
     statements = vex_statements(findings)
-    doc_id = "https://sgai.local/vex/" + hashlib.sha1(
+    doc_id = "https://sgai.local/vex/" + hashlib.sha256(
         (target + _now()).encode()
     ).hexdigest()[:16]
     return {

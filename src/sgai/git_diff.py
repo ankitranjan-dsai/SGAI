@@ -13,10 +13,11 @@ sandboxed detection tools for the findings.
 from __future__ import annotations
 
 import re
-import subprocess
+import subprocess  # nosec B404 — SGAI drives git; see sgai.proc for the argv contract.
 from pathlib import Path
 
 from sgai.models import Finding
+from sgai.proc import resolve_exe
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _DIFF_GIT = re.compile(r"^diff --git a/.+ b/(.+)$")
@@ -28,8 +29,8 @@ class GitDiffError(Exception):
 
 def _git(repo_dir: str, args: list[str], timeout: float = 60.0) -> str:
     try:
-        proc = subprocess.run(
-            ["git", "-C", repo_dir, *args],
+        proc = subprocess.run(  # nosec B603 — fixed argv list, no shell, resolved exe.
+            [resolve_exe("git"), "-C", repo_dir, *args],
             capture_output=True, text=True, timeout=timeout, check=False,
         )
     except FileNotFoundError as exc:

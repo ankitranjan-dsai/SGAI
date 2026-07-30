@@ -7,7 +7,8 @@ place makes the agents and the MCP server easy to configure and test.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
 
 from dotenv import load_dotenv
 
@@ -78,6 +79,30 @@ def is_skipped(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return bool(SKIP_DIRS & set(rel.parts))
+
+
+def path_excluded(path: str, excludes: Sequence[str]) -> bool:
+    """Whether a repo-relative ``path`` sits at or below one of ``excludes``.
+
+    Distinct from :data:`SKIP_DIRS`, which names directories that are never
+    first-party code anywhere. This is the caller's own judgement about which
+    parts of *their* repository an audit covers — the corpus of deliberately
+    vulnerable demo targets a security tool ships, a fixture tree, a vendored
+    subproject with its own scanning. It has to be asked for explicitly
+    (``--exclude``) and it is never a default.
+    """
+    norm = PurePosixPath(path.replace("\\", "/"))
+    for raw in excludes:
+        candidate = raw.replace("\\", "/").strip("/")
+        if not candidate or candidate == ".":
+            # An empty or whole-repo exclusion would silently scan nothing —
+            # for a scanner that is a false negative, not a configuration.
+            continue
+        excluded = PurePosixPath(candidate)
+        if norm == excluded or excluded in norm.parents:
+            return True
+    return False
+
 
 # SGAI's own Markdown report quotes the findings it discovers, secrets and all.
 # It defaults to being written *into the directory being scanned*, so leaving it

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from collections.abc import Sequence
 
 from google.adk.runners import InMemoryRunner
 from google.genai import types
@@ -30,7 +32,7 @@ _USER = "user"
 
 def _session_id(target: str) -> str:
     """A stable session id per target so the agent's sessions persist by repo."""
-    return "scan-" + hashlib.sha1(target.encode()).hexdigest()[:12]
+    return "scan-" + hashlib.sha256(target.encode()).hexdigest()[:12]
 
 
 def _memory_context(diff: ScanDiff) -> str:
@@ -62,6 +64,7 @@ async def run_agent_report(
     label: str | None = None,
     deep: bool = False,
     memory: ScanMemory | None = None,
+    exclude: Sequence[str] = (),
 ) -> tuple[list[Finding], str, ScanDiff | None]:
     """Gather findings deterministically, then narrate them with the agent layer.
 
@@ -79,12 +82,13 @@ async def run_agent_report(
         label: Display name for the report (e.g. a GitHub URL); defaults to repo.
         deep: Also run Semgrep multi-language static analysis.
         memory: Optional scan-memory store enabling cross-scan recall.
+        exclude: Repo-relative paths outside this audit's surface.
 
     Returns:
         A tuple of (findings, agent-written Markdown report, diff-or-None).
     """
     target = label or repo
-    findings = await gather_findings(repo, deep=deep)
+    findings = await gather_findings(repo, deep=deep, exclude=exclude)
 
     diff = None
     context = ""
@@ -192,7 +196,13 @@ async def narrate_findings(
         if session is not None:
             await SgaiMemoryService().add_session_to_memory(session)
     except Exception:  # noqa: BLE001 — memory persistence is best-effort
-        pass
+        # Best-effort, but not silent: swallowing this without a trace means a
+        # memory service that has been failing for weeks looks identical to one
+        # with nothing to recall, and "Changes since last scan" quietly reports
+        # every scan as the first. Debug level keeps CLI output clean.
+        logging.getLogger(__name__).debug(
+            "could not persist session %s to memory", session_id, exc_info=True
+        )
 
     return report
 
@@ -218,7 +228,7 @@ async def refine_patch_chat(
         raise RuntimeError("no model configured")
 
     runner = InMemoryRunner(agent=build_remediation_chat_agent(), app_name=_APP)
-    session_id = "chat-" + hashlib.sha1((code + str(len(history))).encode()).hexdigest()[:12]
+    session_id = "chat-" + hashlib.sha256((code + str(len(history))).encode()).hexdigest()[:12]
     await runner.session_service.create_session(
         app_name=_APP, user_id=_USER, session_id=session_id
     )
