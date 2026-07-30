@@ -41,6 +41,7 @@ from sgai.config import (
     OSV_VULN_URL,
     skip_dir_globs,
     is_skipped,
+    looks_like_generated_report,
 )
 from sgai.mcp_server.sandbox import SandboxError, safe_resolve
 from sgai.proc import resolve_argv, resolve_exe
@@ -909,6 +910,10 @@ def scan_secrets(path: str, root: str, use_llm: bool = False) -> dict[str, Any]:
         try:
             text = f.read_text()
         except (UnicodeDecodeError, OSError):
+            continue
+        # Checked here rather than in the filter above: the text is already read,
+        # so identifying the artifact by its header costs nothing extra.
+        if looks_like_generated_report(text):
             continue
         try:
             rel = str(f.relative_to(root_resolved))

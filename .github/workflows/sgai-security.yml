@@ -62,8 +62,14 @@ jobs:
       # The full picture, fixtures included, kept as an artifact rather than as
       # alerts. This is what makes the scoping above auditable instead of a
       # scanner quietly reporting less than it found.
+      #
+      # Written to RUNNER_TEMP, not the workspace: the report quotes every secret
+      # it finds, so a copy left in the tree is a file the *next* step scans and
+      # fails on. SGAI now recognizes its own report by header wherever it lands
+      # (see sgai.config.looks_like_generated_report), but the artifact has no
+      # business being in the working tree either way.
       - name: Full-tree audit (fixtures included, artifact only)
-        run: uv run sgai scan . -o sgai_full_report.md --no-memory
+        run: uv run sgai scan . -o "$RUNNER_TEMP/sgai_full_report.md" --no-memory
         continue-on-error: true
 
       - name: Upload full audit report
@@ -71,7 +77,7 @@ jobs:
         if: always()
         with:
           name: sgai-full-audit
-          path: sgai_full_report.md
+          path: ${{ runner.temp }}/sgai_full_report.md
           if-no-files-found: warn
 
       # The real merge gate: .sgai/policy.yml violations fail this job and

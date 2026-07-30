@@ -109,3 +109,21 @@ def path_excluded(path: str, excludes: Sequence[str]) -> bool:
 # readable makes each run ingest the previous run's output — findings breed and
 # `sgai check` fails on its own report. Skip it by name.
 GENERATED_REPORT_NAMES: frozenset[str] = frozenset({"sgai_report.md"})
+
+# ...but `-o` takes an arbitrary path, and the name-based guard above only knows
+# the default. `sgai scan . -o audit.md && sgai check .` walks straight back into
+# the same bug: the gate reads the report, finds the secrets it quotes, and fails
+# on SGAI's own output. Rather than chase filenames, recognize the artifact by
+# the header every report opens with — a report is identifiable no matter what it
+# was called.
+REPORT_SIGNATURE: str = "# SGAI Security Report"
+
+
+def looks_like_generated_report(text: str) -> bool:
+    """Whether ``text`` is a Markdown report SGAI itself produced.
+
+    Deliberately narrow: only the very start of the document counts, so a file
+    that merely *quotes* the header — this project's own README and docs do —
+    is still scanned.
+    """
+    return text.lstrip().startswith(REPORT_SIGNATURE)
