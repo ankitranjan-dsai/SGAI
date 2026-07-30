@@ -98,6 +98,44 @@ def test_secret_scan_ignores_sgai_own_report(tmp_path):
     assert not (locations & GENERATED_REPORT_NAMES), f"report was re-ingested: {locations}"
 
 
+def test_secret_scan_ignores_a_report_saved_under_any_name(tmp_path):
+    """`-o` takes an arbitrary path, so the name-based guard alone is not enough.
+
+    Regression test: SGAI's own CI added a second audit writing to
+    `sgai_full_report.md`, and the policy gate in the next step promptly failed on
+    the two secrets that report quoted. Identify the artifact by its header.
+    """
+    root = tmp_path
+    (root / "app.py").write_text(SECRET_LINE)
+    for name in ("sgai_full_report.md", "audit.md", "reports/nightly.md"):
+        p = root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"# SGAI Security Report\n\n| 1 | secret | {SECRET_LINE} |\n")
+
+    locations = {c["file"] for c in scan_secrets(str(root), str(root))["findings"]}
+
+    assert "app.py" in locations, "a real finding must survive the guard"
+    assert not any(loc.endswith(".md") for loc in locations), (
+        f"a generated report was re-ingested: {locations}"
+    )
+
+
+def test_a_document_that_merely_quotes_the_header_is_still_scanned(tmp_path):
+    """The guard must not become an opt-out: prose *about* SGAI is not a report.
+
+    This repo's own README and docs quote the report header, and a real leaked
+    credential in documentation is still a real leaked credential.
+    """
+    root = tmp_path
+    (root / "README.md").write_text(
+        f"# My Project\n\nSGAI writes a `# SGAI Security Report` for you.\n\n{SECRET_LINE}"
+    )
+
+    locations = {c["file"] for c in scan_secrets(str(root), str(root))["findings"]}
+
+    assert "README.md" in locations, f"documentation was skipped: {locations}"
+
+
 # --------------------------------------------------------------------------- #
 # Test-only rule noise
 # --------------------------------------------------------------------------- #

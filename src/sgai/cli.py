@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from rich.console import Console
@@ -61,9 +62,14 @@ def _audit(
     sarif: str | None,
     remember: bool,
     agentic: bool = False,
+    exclude: Sequence[str] = (),
 ) -> int:
     """Audit a local directory and write the report. Shared by path and URL scans."""
     console.print(f"[bold]SGAI[/bold] auditing [cyan]{label}[/cyan] …")
+    if exclude:
+        # Say it out loud, every run: an audit that quietly covers less than the
+        # repository must never look identical to one that covers all of it.
+        console.print(f"[dim]Excluding from this audit: {', '.join(exclude)}[/dim]")
     if agentic:
         # Fully autonomous mode: the orchestrator delegates to the 6-agent
         # pipeline and every tool action goes through the security MCP server.
@@ -98,11 +104,13 @@ def _audit(
 
         console.print("[dim]Running multi-agent narration (triage → report) …[/dim]")
         findings, report, diff = asyncio.run(
-            run_agent_report(repo_dir, label=label, deep=deep, memory=memory)
+            run_agent_report(
+                repo_dir, label=label, deep=deep, memory=memory, exclude=exclude
+            )
         )
     else:
         findings, report, diff = asyncio.run(
-            run_scan(repo_dir, label=label, deep=deep, memory=memory)
+            run_scan(repo_dir, label=label, deep=deep, memory=memory, exclude=exclude)
         )
 
     if diff is not None:
@@ -137,6 +145,7 @@ def _scan(
     sarif: str | None,
     remember: bool,
     agentic: bool = False,
+    exclude: Sequence[str] = (),
 ) -> int:
     from sgai.github import CloneError, cloned_repo, is_remote
 
@@ -146,7 +155,8 @@ def _scan(
             with cloned_repo(path) as repo_dir:
                 console.print(f"[dim]Cloned {path}[/dim]")
                 return _audit(
-                    str(repo_dir), path, output, explain, deep, sarif, remember, agentic
+                    str(repo_dir), path, output, explain, deep, sarif, remember,
+                    agentic, exclude,
                 )
         except CloneError as exc:
             console.print(f"[red]error:[/red] {exc}")
@@ -157,7 +167,9 @@ def _scan(
     if not target.is_dir():
         console.print(f"[red]error:[/red] {path!r} is not a directory or repo URL")
         return 1
-    return _audit(str(target), str(target), output, explain, deep, sarif, remember, agentic)
+    return _audit(
+        str(target), str(target), output, explain, deep, sarif, remember, agentic, exclude
+    )
 
 
 def _history(path: str) -> int:
@@ -337,14 +349,18 @@ def _heal(path: str, dry_run: bool, no_validate: bool, deep: bool) -> int:
     return 0 if (result.applied or not result.rejected) else 1
 
 
-def _check(path: str, deep: bool) -> int:
+def _check(path: str, deep: bool, exclude: Sequence[str] = ()) -> int:
     """Evaluate the policy gate for a repo; exit non-zero on any violation (CI gate)."""
     from sgai.github import CloneError, cloned_repo, is_remote
     from sgai.policy import check as check_policies
     from sgai.runner import gather_findings
 
     def _run(repo_dir: str, label: str) -> int:
-        findings = asyncio.run(gather_findings(repo_dir, deep=deep))
+        if exclude:
+            # Announced before the scan, like `_audit` does: a narrowed gate has
+            # to say so up front, not after it has already reported a pass.
+            console.print(f"[dim]Excluding from this gate: {', '.join(exclude)}[/dim]")
+        findings = asyncio.run(gather_findings(repo_dir, deep=deep, exclude=exclude))
         result = check_policies(findings, repo_dir)
         console.print(f"[bold]SGAI policy check[/bold] — [cyan]{label}[/cyan]")
         console.print(f"[dim]Evaluated {len(result.evaluated)} policy(ies) over {len(findings)} findings.[/dim]")
@@ -412,6 +428,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Don't record this scan or diff it against prior scans.",
     )
+    scan.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Repo-relative path whose findings are outside this audit's surface "
+            "(e.g. a tree of deliberately vulnerable demo fixtures). Repeatable. "
+            "Detection still runs over it; only the reported findings are narrowed."
+        ),
+    )
 
     history = sub.add_parser("history", help="Show the recorded scan timeline for a target.")
     history.add_argument("path", help="Local path or a GitHub URL / owner/repo.")
@@ -449,6 +476,13 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument(
         "--deep", action="store_true", help="Also run Semgrep multi-language static analysis."
     )
+    check.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Repo-relative path whose findings this gate does not cover. Repeatable.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "scan":
@@ -460,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
             args.sarif,
             not args.no_memory,
             args.agentic,
+            args.exclude,
         )
     if args.command == "history":
         return _history(args.path)
@@ -470,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "heal":
         return _heal(args.path, args.dry_run, args.no_validate, args.deep)
     if args.command == "check":
-        return _check(args.path, args.deep)
+        return _check(args.path, args.deep, args.exclude)
     parser.print_help()
     return 1
 

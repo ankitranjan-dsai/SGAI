@@ -306,6 +306,9 @@ uv run sgai scan ./examples/vulnerable_app    # deterministic scan, NO API key
 uv run sgai scan https://github.com/owner/repo   # audit any public repo by URL
 uv run sgai scan ./examples/multi_lang --deep    # + Semgrep multi-language SAST
 uv run sgai scan ./path --sarif out.sarif        # SARIF 2.1.0 for code scanning
+uv run sgai scan . --exclude examples --exclude tests   # narrow the *reported* surface
+                                              #   (repeatable; detection still runs over
+                                              #   the excluded tree — see below)
 
 uv run sgai fix ./examples/vulnerable_app     # preview dependency upgrades (dry run)
 uv run sgai fix . --open-pr                    # open a remediation PR (repo you own)
@@ -324,6 +327,27 @@ uv run sgai accept ./path <finding-id> --reason "tracked in JIRA-123"
 
 uv run python -m sgai.mcp_server.server       # run the security MCP server standalone
 ```
+
+### The audited surface (`--exclude`)
+
+Nothing is excluded by default. `--exclude PATH` (repeatable, on `scan` and
+`check`) names a repo-relative tree whose findings are outside the surface you
+are auditing — a corpus of deliberately vulnerable demo targets, a fixture tree
+full of credential-shaped literals, a vendored subproject with its own pipeline.
+
+It narrows what is **reported**, not what is scanned. Detection still runs over
+the excluded tree and the import graph stays whole, so a production file that
+imports an excluded fixture is still scored against the real dependency set; only
+the final finding list is filtered. Exclusion is also proved per finding: a
+finding SGAI cannot attribute to a path, or one naming both an excluded and a
+non-excluded path, is kept. Ambiguity resolves toward reporting, because a silent
+false negative is the worst failure a scanner has — and every run that uses the
+flag prints the exclusions it applied.
+
+SGAI's own CI uses it: the code-scanning channel covers `src/`, the Dockerfile
+and the lockfile, while an unscoped full-tree audit is uploaded as a build
+artifact so the fixture findings stay on the record. See
+[`.github/workflows/sgai-security.yml`](.github/workflows/sgai-security.yml).
 
 ### HTTP API (deployable service)
 

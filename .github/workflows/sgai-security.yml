@@ -10,6 +10,29 @@ on:
   pull_request:
   workflow_dispatch:
 
+# What this repository's audit covers, and why it is not the whole tree.
+#
+# SGAI ships a corpus of deliberately vulnerable demo targets under `examples/`
+# — a Flask app with `shell=True`, `pickle.loads` on untrusted input, a
+# requirements.txt pinned to Flask 0.12.2 — because a scanner with nothing to
+# find cannot be demonstrated. `tests/` is necessarily full of credential-shaped
+# literals that exist to prove the secret detectors fire. Both are working as
+# intended, and neither ships to a user.
+#
+# Reported as code-scanning alerts, they were 50 of 73 entries in the Security
+# tab: every one intentional, none actionable, and collectively enough noise to
+# hide a real finding in SGAI's own source. SARIF `suppressions` were tried
+# first (SGAI still emits them, see sgai/sarif.py) but GitHub keeps a suppressed
+# result in the `open` state, so the tab stayed unreadable.
+#
+# So the alert channel — the one that is supposed to mean "someone must look at
+# this" — covers SGAI's production surface: `src/`, the Dockerfile, and the
+# committed lockfile. The fixture findings are not discarded: the full-tree
+# audit below runs unscoped and is uploaded as a build artifact, so every hit
+# SGAI has on itself stays on the record and can be diffed run to run.
+env:
+  SGAI_EXCLUDE: --exclude examples --exclude tests
+
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -25,10 +48,10 @@ jobs:
       - name: Install SGAI
         run: uv sync
 
-      # The scan surfaces every finding in the Security tab; pass/fail is
-      # decided by the policy gate below, not by the raw finding count.
+      # Actionable alerts only; pass/fail is decided by the policy gate below,
+      # not by the raw finding count.
       - name: Run SGAI security audit (SARIF)
-        run: uv run sgai scan . --sarif sgai.sarif
+        run: uv run sgai scan . --sarif sgai.sarif $SGAI_EXCLUDE
         continue-on-error: true
 
       - name: Upload SARIF to code scanning
@@ -36,7 +59,28 @@ jobs:
         with:
           sarif_file: sgai.sarif
 
+      # The full picture, fixtures included, kept as an artifact rather than as
+      # alerts. This is what makes the scoping above auditable instead of a
+      # scanner quietly reporting less than it found.
+      #
+      # Written to RUNNER_TEMP, not the workspace: the report quotes every secret
+      # it finds, so a copy left in the tree is a file the *next* step scans and
+      # fails on. SGAI now recognizes its own report by header wherever it lands
+      # (see sgai.config.looks_like_generated_report), but the artifact has no
+      # business being in the working tree either way.
+      - name: Full-tree audit (fixtures included, artifact only)
+        run: uv run sgai scan . -o "$RUNNER_TEMP/sgai_full_report.md" --no-memory
+        continue-on-error: true
+
+      - name: Upload full audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sgai-full-audit
+          path: ${{ runner.temp }}/sgai_full_report.md
+          if-no-files-found: warn
+
       # The real merge gate: .sgai/policy.yml violations fail this job and
       # block the pull request.
       - name: Policy gate (sgai check)
-        run: uv run sgai check .
+        run: uv run sgai check . $SGAI_EXCLUDE

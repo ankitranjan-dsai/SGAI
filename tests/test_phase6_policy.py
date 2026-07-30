@@ -171,7 +171,7 @@ def test_cli_check_fails_nonzero(tmp_path, monkeypatch):
     # Force a Critical production finding, then confirm the gate returns 1.
     import sgai.cli as cli
 
-    def fake_gather(repo_dir, deep=False):
+    def fake_gather(repo_dir, deep=False, exclude=()):
         async def _co():
             return [_f("static", Severity.CRITICAL, "app.py:1")]
         return _co()

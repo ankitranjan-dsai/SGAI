@@ -25,7 +25,13 @@ from sgai.models import Finding, Severity
 CODE_EXEC = "code_execution"
 CMD_INJECTION = "command_injection"
 DESERIALIZATION = "unsafe_deserialization"
-SECRET = "secret_exposure"
+# B105 matches any identifier *containing* "secret"/"password"/"token" that is
+# assigned a string literal, so this capability label — the vocabulary SGAI uses
+# to describe a leaked credential — reads to Bandit as a leaked credential
+# itself. Renaming it to dodge the substring would make the constant's name lie
+# about its value, so the false positive is waived here instead. The value is
+# the wire format shared with a repo's `custom_chains.json` and must not change.
+SECRET = "secret_exposure"  # nosec B105 — capability label, not a credential.
 PATH_TRAVERSAL = "path_traversal"
 SQL_INJECTION = "sql_injection"
 WEAK_CRYPTO = "weak_crypto"
