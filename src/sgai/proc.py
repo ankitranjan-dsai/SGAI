@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 
 
 class ExecutableNotFound(FileNotFoundError):
@@ -40,15 +41,49 @@ class ExecutableNotFound(FileNotFoundError):
         self.name = name
 
 
+def _interpreter_scripts_dir() -> str | None:
+    """The directory console scripts land in for the running interpreter.
+
+    For a virtualenv this is its ``bin/`` (``Scripts\\`` on Windows), which is
+    also the directory holding ``sys.executable`` — so the dirname is the answer
+    on every platform SGAI runs on. Returns ``None`` in the exotic case of an
+    embedded interpreter that reports no ``sys.executable``.
+    """
+    if not sys.executable:
+        return None
+    return os.path.dirname(sys.executable) or None
+
+
 def resolve_exe(name: str) -> str:
     """Return the absolute path to ``name``, or raise :class:`ExecutableNotFound`.
 
     An argument that is already absolute is returned unchanged, so a caller may
     pass an interpreter it was handed (``sys.executable``) through the same
     helper without a special case.
+
+    A bare name is looked for **next to the running interpreter first**, and only
+    then on ``PATH``. Bandit is a declared dependency of SGAI, so ``pip``/``uv``
+    installs its console script into the very same environment as SGAI itself;
+    consulting ``PATH`` alone found it only when that environment happened to be
+    *activated*. Anything that runs SGAI by absolute interpreter path without
+    exporting ``PATH`` — a container ``ENTRYPOINT``, a systemd unit, ``uvicorn``
+    started by full path, an IDE's test runner — got "'bandit' is not installed"
+    for a Bandit sitting beside the interpreter that raised it. CI never caught
+    this because ``uv run`` prepends ``.venv/bin`` to ``PATH``.
+
+    Looking there first is also the more conservative half of this module's own
+    threat model: the environment SGAI was installed into is not attacker-chosen
+    the way an inherited ``PATH`` is. Tools SGAI does *not* ship — ``git``,
+    ``gh`` — are not in that directory and still resolve through ``PATH`` exactly
+    as before.
     """
     if os.path.isabs(name):
         return name
+    scripts_dir = _interpreter_scripts_dir()
+    if scripts_dir is not None:
+        bundled = shutil.which(name, path=scripts_dir)
+        if bundled is not None:
+            return bundled
     resolved = shutil.which(name)
     if resolved is None:
         raise ExecutableNotFound(name)
