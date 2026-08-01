@@ -21,6 +21,7 @@ import asyncio
 import os
 import shutil
 import stat
+import sys
 
 import pytest
 
@@ -223,6 +224,40 @@ def test_a_hijacked_path_cannot_change_which_binary_runs(tmp_path, monkeypatch):
     assert resolve_exe("git") == str(fake), (
         "resolution is PATH-based by design; the point is that it is visible"
     )
+
+    monkeypatch.setenv("PATH", os.path.dirname(real))
+    assert resolve_exe("git") == real
+
+
+def test_a_dependency_resolves_without_an_activated_environment(monkeypatch):
+    """Bandit ships *with* SGAI, so an empty PATH must not make it "not installed".
+
+    The regression: SGAI declares bandit as a dependency, so it is installed
+    beside the running interpreter, but resolution consulted only PATH — every
+    Bandit-backed scan failed whenever SGAI was started by absolute interpreter
+    path (container ENTRYPOINT, systemd, an IDE runner) instead of through an
+    activated venv.
+    """
+    scripts_dir = os.path.dirname(sys.executable)
+    if not shutil.which("bandit", path=scripts_dir):
+        pytest.skip("bandit is not installed alongside this interpreter")
+
+    monkeypatch.setenv("PATH", "")
+    resolved = resolve_exe("bandit")
+
+    assert os.path.isabs(resolved) and os.path.exists(resolved)
+    assert os.path.dirname(resolved) == scripts_dir
+
+
+def test_path_still_resolves_programs_sgai_does_not_ship(monkeypatch):
+    """The interpreter-first lookup must not shadow ordinary PATH resolution.
+
+    `git` is not installed into SGAI's environment, so it has to keep coming from
+    PATH — otherwise the fix above would trade one broken lookup for another.
+    """
+    real = shutil.which("git")
+    if real is None:
+        pytest.skip("git is not installed")
 
     monkeypatch.setenv("PATH", os.path.dirname(real))
     assert resolve_exe("git") == real
